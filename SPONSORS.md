@@ -56,6 +56,24 @@ Shape that fits most tracks: ESP32 sensors -> Tiger Data (time series) -> web da
 A physical demo at the judging table is strong for Design and Completion.
 
 ## Decision
-- Sponsor track:
-- Plus: General, Gemini (MLH)
-- Idea in one sentence:
+- Sponsor track: Chevron (pending the announced challenge)
+- Plus: General, Gemini, ElevenLabs, Tiger Data, GoDaddy domain
+- Idea in one sentence: a scale model of a data center with behind-the-meter backup power. When the grid drops, an ESP32 switches the load to the "generator" and a phone app shows live power, the switchover, and an AI explanation of what happened.
+
+### Why it fits Chevron
+Chevron New Energies is building natural-gas power plants co-located with data centers (first one: Microsoft, with Engine No. 1). Their pitch is always-on, behind-the-meter power that tracks data center demand. Our model is that system in miniature.
+
+### Hardware (all low voltage, no mains)
+- ESP32 (powered from laptop USB so it survives the switchover)
+- 2x INA219 current/voltage sensors (grid side, generator side)
+- 2-channel relay module or MOSFETs for the transfer switch
+- "Grid": 5V USB supply. "Generator": battery pack
+- "Data center load": small DC fan + LEDs
+- Push button or kill switch to simulate an outage
+
+### Demo script
+1. App shows load on grid, steady.
+2. Judge presses the outage button.
+3. Load moves to generator, app logs switchover time, phone speaks the alert.
+4. Ask the AI "what happened and what should the operator do?"
+
