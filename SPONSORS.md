@@ -63,6 +63,14 @@ A physical demo at the judging table is strong for Design and Completion.
 ### Why it fits Chevron
 Chevron New Energies is building natural-gas power plants co-located with data centers (first one: Microsoft, with Engine No. 1). Their pitch is always-on, behind-the-meter power that tracks data center demand. Our model is that system in miniature.
 
+### Chevron facts for the pitch (checked 2026-10-10)
+- Project Kilby, West Texas. Chevron subsidiary Energy Forge One signed a 20-year deal with Microsoft (announced 2026-06-22), developed with Engine No. 1.
+- About 2.67 GW, built in phases. Natural gas from the Permian. GE Vernova turbines plus Solar Turbines (Caterpillar).
+- Final investment decision expected end of 2026. First power expected 2028.
+- Cost is an analyst estimate ($7-9B), not a Chevron figure. Pecos/Reeves County location is from one outlet, not confirmed. Don't quote either.
+- In Kilby the turbines are the main power source, not the backup. Frame the demo as: data center runs on dedicated turbine power; if a turbine trips, the load fails over to grid or battery. That matches Chevron's real setup.
+- Stretch feature: vibration sensor on the "turbine" so the AI flags trouble before the trip (predictive maintenance).
+
 ### Hardware (all low voltage, no mains)
 - ESP32 (powered from laptop USB so it survives the switchover)
 - 2x INA219 current/voltage sensors (grid side, generator side)
