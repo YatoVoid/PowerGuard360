@@ -182,7 +182,7 @@ export function TurbineTiles({ onPick }: { onPick?: () => void }) {
               {tb.source === 'live' && <View style={st.liveDot} accessibilityLabel="live sensors" />}
             </View>
             <Text style={[st.tileMw, { color: c.ink }]}>{on ? fmt(tb.outputMw) : '0'}<Text style={[st.statUnit, { color: c.ink }]}> MW</Text></Text>
-            <Text style={[st.tileMeta, { color: c.ink }]}>{on ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status}</Text>
+            <Text style={[st.tileMeta, { color: c.ink }]}>{on ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status[0].toUpperCase() + tb.status.slice(1)}</Text>
             <View style={st.tileBar}><View style={{ height: 4, width: `${(tb.outputMw / tb.ratedMw) * 100}%`, backgroundColor: c.bar }} /></View>
           </Pressable>
         );
@@ -360,7 +360,7 @@ export const st = StyleSheet.create({
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.flow },
   tileId: { fontFamily: F.bold, fontSize: 13 },
   tileMw: { fontFamily: F.num, fontSize: 22, fontVariant: ['tabular-nums'] },
-  tileMeta: { fontFamily: F.regular, fontSize: 12, opacity: 0.8, textTransform: 'capitalize' },
+  tileMeta: { fontFamily: F.regular, fontSize: 12, opacity: 0.8 },
   tileBar: { height: 4, backgroundColor: C.surface2, marginTop: 6, overflow: 'hidden' },
   hint: { fontFamily: F.regular, fontSize: 13, color: C.ink2, marginBottom: 8 },
   detailHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
