@@ -58,30 +58,27 @@ A physical demo at the judging table is strong for Design and Completion.
 ## Decision
 - Sponsor track: Chevron (pending the announced challenge)
 - Plus: General, Gemini, ElevenLabs, Tiger Data, GoDaddy domain
-- Idea in one sentence: a scale model of a data center with behind-the-meter backup power. When the grid drops, an ESP32 switches the load to the "generator" and a phone app shows live power, the switchover, and an AI explanation of what happened.
+- No hardware available. Software only.
+- Idea in one sentence: a control room and planning tool for a Kilby-style plant, where gas turbines power an AI data center directly. It simulates the data center's swinging load, decides how many turbines and how much battery to run, catches failures before they happen, and an AI copilot explains every decision.
 
-### Why it fits Chevron
-Chevron New Energies is building natural-gas power plants co-located with data centers (first one: Microsoft, with Engine No. 1). Their pitch is always-on, behind-the-meter power that tracks data center demand. Our model is that system in miniature.
+### The real problem it solves
+- AI training loads swing hard and fast (thousands of GPUs speed up and slow down together). Gas turbines ramp slower than that, and the swings stress them.
+- An operator has to answer, every hour: how many turbines on, how much spinning reserve, when to lean on the battery or grid, when to take a turbine down for maintenance. Too few and the data center drops. Too many and you burn gas and emissions for nothing.
 
-### Chevron facts for the pitch (checked 2026-10-10)
-- Project Kilby, West Texas. Chevron subsidiary Energy Forge One signed a 20-year deal with Microsoft (announced 2026-06-22), developed with Engine No. 1.
-- About 2.67 GW, built in phases. Natural gas from the Permian. GE Vernova turbines plus Solar Turbines (Caterpillar).
-- Final investment decision expected end of 2026. First power expected 2028.
-- Cost is an analyst estimate ($7-9B), not a Chevron figure. Pecos/Reeves County location is from one outlet, not confirmed. Don't quote either.
-- In Kilby the turbines are the main power source, not the backup. Frame the demo as: data center runs on dedicated turbine power; if a turbine trips, the load fails over to grid or battery. That matches Chevron's real setup.
-- Stretch feature: vibration sensor on the "turbine" so the AI flags trouble before the trip (predictive maintenance).
+### What the app does
+1. Live view: data center load vs. turbine output vs. battery, per second, from a simulator we write.
+2. Planner: given a load forecast, picks turbines on/off and battery reserve. Shows cost, gas burned, CO2, and uptime risk.
+3. Failure drill: "trip turbine 2" button. Watch battery cover the gap and the rest ramp up. Same demo moment as the hardware version.
+4. Early warning: simulated turbine sensor drift (vibration, exhaust temp). Flags trouble before the trip.
+5. AI copilot (Gemini): "why did you start turbine 4?", "what if load grows 20% next month?". Voice alerts via ElevenLabs.
 
-### Hardware (all low voltage, no mains)
-- ESP32 (powered from laptop USB so it survives the switchover)
-- 2x INA219 current/voltage sensors (grid side, generator side)
-- 2-channel relay module or MOSFETs for the transfer switch
-- "Grid": 5V USB supply. "Generator": battery pack
-- "Data center load": small DC fan + LEDs
-- Push button or kill switch to simulate an outage
+### Real data we can use
+- ERCOT public prices/load (grid fallback cost in Texas)
+- EIA natural gas prices (Waha hub, Permian)
+- Published turbine specs (GE Vernova, Solar Turbines) for size, ramp, efficiency
+- Load shape modeled on published AI training power traces
 
-### Demo script
-1. App shows load on grid, steady.
-2. Judge presses the outage button.
-3. Load moves to generator, app logs switchover time, phone speaks the alert.
-4. Ask the AI "what happened and what should the operator do?"
-
+### Split
+- Simulator + planner logic
+- Backend, database (Tiger Data), AI copilot
+- Dashboard UI
