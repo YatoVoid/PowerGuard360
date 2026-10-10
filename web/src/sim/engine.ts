@@ -1,7 +1,7 @@
 import type {
-  Ambient, Delivery, HistoryPoint, PlantEvent, PlantState, Prediction, Severity, Shipment, StepInputs, Turbine, TurbineSensors,
+  Ambient, Engineer, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Severity, StepInputs, Turbine, TurbineSensors,
 } from "../types";
-import { deliveryTarget, pathLength, pointOnPath } from "./site";
+import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
 
 // All plant numbers here are illustrative. Real turbine data replaces this module's output later;
 // the screens only read PlantState.
@@ -16,17 +16,26 @@ const HISTORY_LEN = 300;
 const TEMP_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
-export const SHIPMENT_REPLAY_SPEED = 12;
-export const GEOFENCE_KM = 3;
 // The sensor board on the table feeds GT-08; every other unit's sensors are simulated.
 export const LIVE_SENSOR_UNIT = "GT-08";
-// Walking pace on site, replayed faster for the demo the same way the trucks are.
+// Walking pace on site, replayed faster for the demo.
 export const WALK_M_PER_S = 1.3;
 export const SITE_REPLAY_SPEED = 3;
-const UNLOAD_S = 20;
-const CREWS = ["Crew A", "Crew B", "Crew C"];
+export const REPAIR_S = 25;
+const SIM_ACCEPT_S = 4;
+// After a fix, give the readings time to settle before the forecast can raise a new request.
+const FIX_COOLDOWN_S = 120;
+const PRIORITY_RANK: Record<Priority, number> = { P1: 0, P2: 1, P3: 2 };
 
-export const SITE_LON_LAT: [number, number] = [-103.56, 31.37];
+export const PHONE_ENGINEER = "ENG-1";
+function initialEngineers(): Engineer[] {
+  return [
+    { id: PHONE_ENGINEER, name: "Phone engineer", kind: "phone", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-2", name: "R. Alvarez", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-3", name: "J. Chen", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+  ];
+}
+
 
 export function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -48,27 +57,6 @@ export function haversineKm(a: [number, number], b: [number, number]) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export function routeLengthKm(route: [number, number][]) {
-  let km = 0;
-  for (let i = 1; i < route.length; i++) km += haversineKm(route[i - 1], route[i]);
-  return km;
-}
-
-export function pointAlong(route: [number, number][], progress: number): [number, number] {
-  const total = routeLengthKm(route);
-  let target = Math.min(Math.max(progress, 0), 1) * total;
-  for (let i = 1; i < route.length; i++) {
-    const seg = haversineKm(route[i - 1], route[i]);
-    if (target <= seg || i === route.length - 1) {
-      const f = seg === 0 ? 0 : Math.min(target / seg, 1);
-      return [route[i - 1][0] + (route[i][0] - route[i - 1][0]) * f, route[i - 1][1] + (route[i][1] - route[i - 1][1]) * f];
-    }
-    target -= seg;
-  }
-  return route[route.length - 1];
-}
-
-// Gas turbine output falls with air density: lower pressure and hotter air both cut capacity.
 export function derateFactor(pressureHpa: number, temperatureC: number) {
   return Math.max(0.6, Math.min(1.05, (pressureHpa / 1013.25) * (1 - 0.006 * (temperatureC - 15))));
 }
@@ -109,53 +97,6 @@ function simSensors(tb: Turbine, i: number, t: number, rnd: () => number, runnin
   };
 }
 
-type NamedPoint = { name?: string; at: [number, number] };
-
-const MIDLAND_ROUTE: NamedPoint[] = [
-  { name: "Midland", at: [-102.078, 31.997] }, { name: "Odessa", at: [-102.368, 31.845] }, { at: [-102.62, 31.72] },
-  { name: "Monahans", at: [-102.892, 31.594] }, { at: [-103.127, 31.538] }, { at: [-103.31, 31.47] },
-  { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
-];
-const FORT_STOCKTON_ROUTE: NamedPoint[] = [
-  { name: "Fort Stockton", at: [-102.879, 30.894] }, { at: [-103.02, 30.98] }, { at: [-103.2, 31.12] },
-  { at: [-103.36, 31.27] }, { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
-];
-
-function makeShipment(
-  id: string, cargo: string, forAsset: string, carrier: string, points: NamedPoint[], speedKmh: number, startProgress: number,
-): Shipment {
-  const route = points.map((p) => p.at);
-  const total = routeLengthKm(route);
-  const stops: Shipment["stops"] = [];
-  let km = 0;
-  points.forEach((p, i) => {
-    if (i > 0) km += haversineKm(points[i - 1].at, p.at);
-    if (p.name) stops.push({ name: p.name, at: km / total });
-  });
-  const [lon, lat] = pointAlong(route, startProgress);
-  const remainingKm = total * (1 - startProgress);
-  return {
-    id, cargo, forAsset, carrier, route, stops,
-    origin: points[0].name ?? "",
-    progress: startProgress,
-    speedKmh,
-    source: "sim",
-    lat, lon,
-    remainingKm,
-    etaMin: (remainingKm / (speedKmh * SHIPMENT_REPLAY_SPEED)) * 60,
-    arrived: false,
-    lastPingT: null,
-  };
-}
-
-export function initialShipments(): Shipment[] {
-  return [
-    makeShipment("TRL-204", "Combustion liner set", "GT-03", "Permian Freight", MIDLAND_ROUTE, 96, 0),
-    makeShipment("TNK-118", "Turbine lube oil, 6,000 gal", "Lube oil system", "Basin Fluids", MIDLAND_ROUTE.slice(1), 88, 0.3),
-    makeShipment("TRL-311", "Replacement battery modules (12)", "battery", "Trans-Pecos Haul", FORT_STOCKTON_ROUTE, 80, 0.12),
-  ];
-}
-
 export function createPlant(seed = 7): PlantState {
   const turbines = Array.from({ length: TURBINE_COUNT }, (_, i) => makeTurbine(i));
   const tempHistory: Record<string, number[]> = {};
@@ -170,8 +111,8 @@ export function createPlant(seed = 7): PlantState {
     turbines,
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
     ambient: { pressureHpa: 1009.2, temperatureC: 31, airQualityRaw: 140, lightRaw: 2800, source: "sim", lastSeenMs: null },
-    shipments: initialShipments(),
-    deliveries: [],
+    engineers: initialEngineers(),
+    requests: [],
     predictions: [],
     events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the site sensor board when it is connected` }],
     history: [],
@@ -337,66 +278,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
   const reserveMw = available.reduce((s, x) => s + x.capacityMw, 0) - outputMw + battery.maxPowerMw * (battery.socPct > 10 ? 1 : 0);
 
-  const shipments = prev.shipments.map((sh) => {
-    const s = { ...sh };
-    const total = routeLengthKm(s.route);
-    const before = s.remainingKm;
-    const phone = inputs.gpsKm?.find((g) => g.shipmentId === s.id);
-    if (inputs.gpsRelease?.includes(s.id)) s.source = "sim";
-    if (inputs.gps && inputs.gps.shipmentId === s.id) {
-      s.lat = inputs.gps.lat; s.lon = inputs.gps.lon; s.source = "live"; s.lastPingT = t;
-      s.remainingKm = haversineKm([s.lon, s.lat], SITE_LON_LAT);
-      s.progress = Math.max(0, Math.min(1, 1 - s.remainingKm / total));
-    } else if (phone && !s.arrived) {
-      s.source = "live"; s.lastPingT = t;
-      s.progress = Math.min(1, s.progress + phone.km / total);
-      [s.lon, s.lat] = pointAlong(s.route, s.progress);
-      s.remainingKm = total * (1 - s.progress);
-    } else if (s.source === "sim" && !s.arrived) {
-      s.progress = Math.min(1, s.progress + (s.speedKmh / 3600) * SHIPMENT_REPLAY_SPEED / total);
-      [s.lon, s.lat] = pointAlong(s.route, s.progress);
-      s.remainingKm = total * (1 - s.progress);
-    }
-    s.etaMin = (s.remainingKm / (s.speedKmh * SHIPMENT_REPLAY_SPEED)) * 60;
-    if (before > GEOFENCE_KM && s.remainingKm <= GEOFENCE_KM && !s.arrived) log("info", s.id, `${s.id} entered the site geofence`);
-    if (!s.arrived && s.remainingKm < 0.3) {
-      s.arrived = true;
-      log("info", s.id, `${s.id} arrived on site: ${s.cargo.toLowerCase()}`);
-    }
-    return s;
-  });
-
-  const deliveries: Delivery[] = prev.deliveries.map((d) => ({ ...d }));
-  shipments.forEach((sh, i) => {
-    if (!sh.arrived || deliveries.some((d) => d.shipmentId === sh.id)) return;
-    const target = deliveryTarget(sh.forAsset);
-    deliveries.push({
-      shipmentId: sh.id, cargo: sh.cargo, crew: CREWS[i % CREWS.length], workers: i === 1 ? 2 : 3,
-      toAsset: sh.forAsset, toLabel: target.label, path: target.path,
-      status: "unloading", unloadLeftS: UNLOAD_S, progress: 0, pos: target.path[0], etaMin: 0, deliveredT: null,
-    });
-    log("info", sh.id, `${CREWS[i % CREWS.length]} unloading ${sh.id} at the dock`);
-  });
-  const stepM = WALK_M_PER_S * SITE_REPLAY_SPEED;
-  for (const d of deliveries) {
-    const len = pathLength(d.path);
-    if (d.status === "unloading") {
-      d.unloadLeftS = Math.max(0, d.unloadLeftS - 1);
-      if (d.unloadLeftS === 0) {
-        d.status = "carrying";
-        log("info", d.shipmentId, `${d.crew} carrying ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
-      }
-    } else if (d.status === "carrying") {
-      d.progress = Math.min(1, d.progress + stepM / len);
-      d.pos = pointOnPath(d.path, d.progress);
-      if (d.progress >= 1) {
-        d.status = "delivered"; d.deliveredT = t;
-        log("info", d.shipmentId, `${d.crew} delivered ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
-      }
-    }
-    d.etaMin = d.status === "delivered" ? 0 : (d.unloadLeftS + ((1 - d.progress) * len) / stepM) / 60;
-  }
-
   const tempHistory: Record<string, number[]> = {};
   const excessHistory: Record<string, number[]> = {};
   for (const tb of turbines) {
@@ -413,6 +294,123 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     .map((x) => predictOverheat(x.id, tempHistory[x.id], excessHistory[x.id]))
     .sort((a, b) => b.risk - a.risk);
 
+  // Maintenance: raise requests from what the sensors show, dispatch engineers, walk, repair.
+  const engineers = prev.engineers.map((e) => ({ ...e }));
+  const requests = prev.requests.map((r) => ({ ...r }));
+  const active = (r: MaintenanceRequest) => r.status !== "resolved" && r.status !== "cancelled";
+  const openFor = (asset: string) => requests.find((r) => r.asset === asset && active(r));
+  const recentlyFixed = (asset: string) =>
+    requests.some((r) => r.asset === asset && r.status === "resolved" && r.resolvedT !== null && t - r.resolvedT < FIX_COOLDOWN_S);
+  const create = (asset: string, reason: string, priority: Priority, origin: "auto" | "manual") => {
+    const r: MaintenanceRequest = {
+      id: `MR-${101 + requests.length}`, asset, reason, priority, origin, status: "open", createdT: t,
+      engineerId: null, dispatchedT: null, path: [], progress: 0, etaMin: 0, repairLeftS: REPAIR_S, resolvedT: null,
+    };
+    requests.push(r);
+    log(priority === "P1" ? "trip" : priority === "P2" ? "watch" : "info", asset, `${r.id} ${priority} ${asset}: ${reason}`);
+    return r;
+  };
+  const engineerOf = (r: MaintenanceRequest) => engineers.find((e) => e.id === r.engineerId);
+
+  for (const m of inputs.newRequests ?? []) {
+    if (openFor(m.asset)) continue;
+    create(m.asset, m.reason.trim() || "Inspection requested by the control room", "P2", "manual");
+  }
+
+  for (const tb of turbines) {
+    let priority: Priority | null = null;
+    let reason = "";
+    const pred = predictions.find((p) => p.turbineId === tb.id);
+    if (tb.status === "tripped") { priority = "P1"; reason = `Tripped: ${(tb.tripCause ?? "unknown cause").toLowerCase()}`; }
+    else if (tb.status === "watch") { priority = "P2"; reason = `Exhaust ${tb.exhaustTempC.toFixed(0)} °C, above the ${WATCH_TEMP_C} °C watch limit`; }
+    else if (pred && pred.minutesToLimit !== null && !recentlyFixed(tb.id)) { priority = "P3"; reason = `Overheat forecast in about ${pred.minutesToLimit.toFixed(1)} min`; }
+    if (!priority) continue;
+    const existing = openFor(tb.id);
+    if (!existing) create(tb.id, reason, priority, "auto");
+    else if (PRIORITY_RANK[priority] < PRIORITY_RANK[existing.priority]) {
+      existing.priority = priority; existing.reason = reason;
+      log(priority === "P1" ? "trip" : "watch", tb.id, `${existing.id} raised to ${priority}: ${reason}`);
+    }
+  }
+
+  for (const id of inputs.cancel ?? []) {
+    const r = requests.find((x) => x.id === id && active(x));
+    if (!r) continue;
+    const e = engineerOf(r);
+    if (e) { e.status = "available"; e.requestId = null; }
+    r.status = "cancelled";
+    log("info", r.asset, `${r.id} cancelled by the control room`);
+  }
+
+  // Most urgent first; the phone engineer gets first pick so the person carrying the app is in the loop.
+  const queue = requests.filter((r) => r.status === "open").sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdT - b.createdT);
+  for (const r of queue) {
+    const free = engineers.filter((e) => e.status === "available").sort((a, b) => (a.kind === "phone" ? -1 : 0) - (b.kind === "phone" ? -1 : 0));
+    const e = free[0];
+    if (!e) break;
+    r.status = "dispatched"; r.engineerId = e.id; r.dispatchedT = t; r.path = routeFrom(e.pos, r.asset); r.progress = 0;
+    e.status = "dispatched"; e.requestId = r.id;
+    log("info", r.asset, `${r.id} dispatched to ${e.name}`);
+  }
+
+  for (const a of inputs.accept ?? []) {
+    const r = requests.find((x) => x.id === a.requestId);
+    const e = engineers.find((x) => x.id === a.engineerId);
+    if (!r || !e || r.status !== "dispatched" || r.engineerId !== e.id) continue;
+    r.status = "en-route"; e.status = "walking";
+    log("info", r.asset, `${e.name} accepted ${r.id} and is heading to ${assetLabel(r.asset)}`);
+  }
+  for (const a of inputs.autoWalk ?? []) {
+    const e = engineers.find((x) => x.id === a.engineerId);
+    if (e) e.autoWalk = a.on;
+  }
+  for (const id of inputs.startRepair ?? []) {
+    const r = requests.find((x) => x.id === id);
+    const e = r && engineerOf(r);
+    if (!r || !e || r.status !== "on-site") continue;
+    r.status = "repairing"; e.status = "repairing";
+    log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`);
+  }
+
+  const paceM = WALK_M_PER_S * SITE_REPLAY_SPEED;
+  for (const r of requests) {
+    const e = engineerOf(r);
+    if (!e || !active(r)) continue;
+    // Simulated crew accept, walk and start work on their own.
+    if (e.kind === "sim" && r.status === "dispatched" && r.dispatchedT !== null && t - r.dispatchedT >= SIM_ACCEPT_S) {
+      r.status = "en-route"; e.status = "walking";
+      log("info", r.asset, `${e.name} accepted ${r.id} and is heading to ${assetLabel(r.asset)}`);
+    }
+    const len = Math.max(1, pathLength(r.path));
+    if (r.status === "en-route") {
+      const phoneMeters = (inputs.walkM ?? []).filter((w) => w.engineerId === e.id).reduce((s, w) => s + w.meters, 0);
+      const meters = e.kind === "sim" || e.autoWalk ? paceM : phoneMeters;
+      if (meters > 0) e.lastStepT = t;
+      r.progress = Math.min(1, r.progress + meters / len);
+      e.pos = pointOnPath(r.path, r.progress);
+      if (r.progress >= 1) {
+        r.status = "on-site"; e.status = "on-site";
+        log("info", r.asset, `${e.name} arrived at ${assetLabel(r.asset)}`);
+      }
+    }
+    if (e.kind === "sim" && r.status === "on-site") { r.status = "repairing"; e.status = "repairing"; log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`); }
+    if (r.status === "repairing") {
+      r.repairLeftS = Math.max(0, r.repairLeftS - 1);
+      if (r.repairLeftS === 0) {
+        r.status = "resolved"; r.resolvedT = t;
+        e.status = "available"; e.requestId = null;
+        const tb = turbines.find((x) => x.id === r.asset);
+        if (tb) {
+          simWear[tb.id] = 0;
+          if (tb.status === "tripped") { tb.status = "running"; tb.tripCause = null; }
+        }
+        log("info", r.asset, `${r.id} resolved: ${e.name} fixed ${assetLabel(r.asset)}`);
+      }
+    }
+    const walkLeft = r.status === "dispatched" || r.status === "en-route" ? ((1 - r.progress) * len) / paceM : 0;
+    r.etaMin = (walkLeft + (r.status === "resolved" ? 0 : r.repairLeftS)) / 60;
+  }
+
   const point: HistoryPoint = { t, demandMw, outputMw, batteryMw, gridMw };
 
   return {
@@ -425,8 +423,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     turbines,
     battery,
     ambient,
-    shipments,
-    deliveries,
+    engineers,
+    requests,
     predictions,
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],
@@ -437,17 +435,3 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   };
 }
 
-export function splitRoute(route: [number, number][], progress: number): [[number, number][], [number, number][]] {
-  const here = pointAlong(route, progress);
-  const total = routeLengthKm(route);
-  const driven: [number, number][] = [route[0]];
-  let km = 0;
-  let i = 1;
-  for (; i < route.length; i++) {
-    km += haversineKm(route[i - 1], route[i]);
-    if (km / total > progress) break;
-    driven.push(route[i]);
-  }
-  driven.push(here);
-  return [driven, [here, ...route.slice(i)]];
-}

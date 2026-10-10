@@ -19,3 +19,6 @@ export const IconMark = () => (
 export const IconTag = () => (
   <svg {...base}><path d="M3 10V4h6l8 8-6 6z" /><circle cx="7" cy="7" r="1.2" /></svg>
 );
+export const IconWrench = () => (
+  <svg {...base}><path d="M12.5 3.5a4 4 0 0 0-4.6 5.3L3 13.7 6.3 17l4.9-4.9a4 4 0 0 0 5.3-4.6l-2.4 2.4-2.6-.6-.6-2.6z" /></svg>
+);

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
-import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
-import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from "../types";
+import { LIVE_SENSOR_UNIT, REPAIR_S, TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
+import type { HistoryPoint, MaintenanceRequest, PlantEvent, Source, Turbine } from "../types";
+import { assetLabel } from "../sim/site";
 
 export const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -189,6 +190,77 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
 
 export function AssetDetail() {
   const selected = useStore((s) => s.selected);
+  const fallback = useStore((s) => s.plant.predictions[0]?.turbineId ?? "GT-01");
+  const asset = selected ?? fallback;
+  return (
+    <>
+      <AssetBody />
+      <MaintenanceBox asset={asset} />
+    </>
+  );
+}
+
+const STATUS_TEXT: Record<MaintenanceRequest["status"], string> = {
+  open: "Waiting for an engineer",
+  dispatched: "Sent to engineer, waiting for accept",
+  "en-route": "Engineer walking to the asset",
+  "on-site": "Engineer on site",
+  repairing: "Repair in progress",
+  resolved: "Resolved",
+  cancelled: "Cancelled",
+};
+export const requestStatusText = (r: MaintenanceRequest) => STATUS_TEXT[r.status];
+
+export function etaText(min: number) {
+  return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${fmt(min, 1)} min`;
+}
+
+export function PriorityChip({ p }: { p: MaintenanceRequest["priority"] }) {
+  return <span className={`prio prio-${p.toLowerCase()}`}>{p}</span>;
+}
+
+function MaintenanceBox({ asset }: { asset: string }) {
+  const req = useStore((s) => s.plant.requests.find((r) => r.asset === asset && r.status !== "resolved" && r.status !== "cancelled"));
+  const engineer = useStore((s) => (req ? s.plant.engineers.find((e) => e.id === req.engineerId) : undefined));
+  const act = useStore((s) => s.act);
+  const [reason, setReason] = useState("");
+  return (
+    <div className="maint-box">
+      <h4 className="sub">Maintenance</h4>
+      {req ? (
+        <>
+          <div className="maint-line">
+            <PriorityChip p={req.priority} />
+            <strong>{req.id}</strong>
+            <span className="maint-origin">{req.origin === "auto" ? "raised by sensors" : "requested manually"}</span>
+          </div>
+          <p className="maint-reason">{req.reason}</p>
+          <dl className="kv">
+            <div><dt>Status</dt><dd>{requestStatusText(req)}</dd></div>
+            <div><dt>Engineer</dt><dd>{engineer?.name ?? "Not assigned"}</dd></div>
+            {req.status !== "open" && <div><dt>Fixed in</dt><dd>{etaText(req.etaMin)}</dd></div>}
+          </dl>
+          {req.status === "repairing" && (
+            <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${1 - req.repairLeftS / REPAIR_S})` }} /></div>
+          )}
+          <div className="actions"><button type="button" className="btn" onClick={() => act({ type: "cancel", requestId: req.id })}>Cancel request</button></div>
+        </>
+      ) : (
+        <form
+          className="maint-form"
+          onSubmit={(e) => { e.preventDefault(); act({ type: "request", asset, reason }); setReason(""); }}
+        >
+          <label htmlFor={`reason-${asset}`}>No open request for {assetLabel(asset)}.</label>
+          <input id={`reason-${asset}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What should the engineer check? (optional)" maxLength={200} />
+          <button type="submit" className="btn btn-primary">Request engineer</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function AssetBody() {
+  const selected = useStore((s) => s.selected);
   const plant = useStore((s) => s.plant);
   if (!selected) {
     const riskiest = plant.predictions[0]?.turbineId;
@@ -279,48 +351,7 @@ export function AssetDetail() {
       </div>
     );
   }
-  const sh = plant.shipments.find((x) => x.id === selected);
-  if (sh) return <ShipmentDetail id={sh.id} />;
   return null;
-}
-
-export function DeliveryInfo({ d }: { d: Delivery }) {
-  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
-  return (
-    <div className="delivery">
-      <h4 className="sub">On site</h4>
-      <p className="delivery-line">
-        {d.status === "unloading" && <>{d.crew} ({d.workers} people) unloading at the dock. Parts reach the {d.toLabel} in {eta}.</>}
-        {d.status === "carrying" && <>{d.crew} ({d.workers} people) carrying the parts to the {d.toLabel}. Arrives in {eta}.</>}
-        {d.status === "delivered" && <>{d.crew} delivered the parts to the {d.toLabel}.</>}
-      </p>
-      {d.status !== "delivered" && (
-        <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${d.status === "unloading" ? 0 : d.progress})` }} /></div>
-      )}
-    </div>
-  );
-}
-
-export function ShipmentDetail({ id }: { id: string }) {
-  const sh = useStore((s) => s.plant.shipments.find((x) => x.id === id));
-  const delivery = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === id));
-  if (!sh) return null;
-  return (
-    <div className="detail">
-      <div className="detail-head">
-        <h3>{sh.id}</h3>
-        <SourceTag source={sh.source} />
-      </div>
-      <p className="cause">{sh.cargo}</p>
-      <dl className="kv">
-        <div><dt>Carrier</dt><dd>{sh.carrier}</dd></div>
-        <div><dt>Distance left</dt><dd>{sh.arrived ? "On site" : `${fmt(sh.remainingKm, 1)} km`}</dd></div>
-        <div><dt>ETA</dt><dd>{sh.arrived ? "Arrived" : `${fmt(sh.etaMin)} min`}</dd></div>
-        <div><dt>Position</dt><dd>{fmt(sh.lat, 4)}, {fmt(sh.lon, 4)}</dd></div>
-      </dl>
-      {delivery && <DeliveryInfo d={delivery} />}
-    </div>
-  );
 }
 
 export function AlarmList({ events, limit = 8, empty = "No alarms." }: { events: PlantEvent[]; limit?: number; empty?: string }) {

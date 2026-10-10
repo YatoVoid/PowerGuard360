@@ -1,49 +1,40 @@
 import { create } from "zustand";
-import { createPlant, haversineKm, step } from "./sim/engine";
-import type { PlantState, SensorReading } from "./types";
+import { createPlant, step } from "./sim/engine";
+import type { PlantState, StepInputs } from "./types";
 
-export type View = "twin" | "dashboard" | "map";
-export type CameraPreset = "overview" | "top" | "turbines" | "dock";
+export type View = "twin" | "dashboard" | "maintenance";
+export type CameraPreset = "overview" | "top" | "turbines" | "control";
 
-// Walking 1 m moves the trailer 100 m along its route, so a phone carried around a room shows real movement.
-export const PHONE_GPS_SCALE = 100;
+// Same action shapes the plant server accepts (server/src/protocol.ts).
+export type Action =
+  | { type: "trip"; unit: string }
+  | { type: "reset"; unit: string }
+  | { type: "request"; asset: string; reason: string }
+  | { type: "cancel"; requestId: string };
 
-export interface PhoneGps {
-  shipmentId: string;
-  status: "waiting" | "tracking" | "denied" | "unavailable";
-  walkedM: number;
-  accuracyM: number | null;
-}
+// "live" = following the shared plant server; "local" = running our own copy because no server is reachable.
+export type Link = "connecting" | "live" | "local";
 
 interface Store {
   plant: PlantState;
+  link: Link;
   view: View;
   selected: string | null;
   showLabels: boolean;
   cameraPreset: { name: CameraPreset; n: number } | null;
   setShowLabels: (v: boolean) => void;
   goTo: (name: CameraPreset) => void;
-  paused: boolean;
-  pendingTrips: string[];
-  pendingResets: string[];
-  sensor: SensorReading | null;
-  sensorAtMs: number | undefined;
-  phoneGps: PhoneGps | null;
-  pendingGpsKm: number;
-  pendingRelease: string[];
-  startPhoneGps: (shipmentId: string) => void;
-  stopPhoneGps: () => void;
   setView: (v: View) => void;
   select: (id: string | null) => void;
-  setPaused: (p: boolean) => void;
+  act: (a: Action) => void;
   trip: (id: string) => void;
   reset: (id: string) => void;
-  pushSensor: (r: SensorReading) => void;
-  tick: () => void;
-  restart: () => void;
 }
 
-let watchId: number | null = null;
+type LocalQueue = Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "cancel" | "accept" | "autoWalk">>;
+const emptyQueue = (): LocalQueue => ({ tripRequests: [], resetRequests: [], newRequests: [], cancel: [], accept: [], autoWalk: [] });
+let queue = emptyQueue();
+let socket: WebSocket | null = null;
 
 // ?ff=360 starts the plant six minutes in, for rehearsing the later parts of the demo.
 function initialPlant() {
@@ -55,92 +46,87 @@ function initialPlant() {
 
 function viewFromHash(): View {
   const h = location.hash.replace("#", "");
-  return h === "dashboard" || h === "map" ? h : "twin";
+  return h === "dashboard" || h === "maintenance" ? h : "twin";
 }
 
 export const useStore = create<Store>((set, get) => ({
   plant: initialPlant(),
+  link: "connecting",
   view: viewFromHash(),
   selected: null,
   showLabels: true,
   cameraPreset: null,
   setShowLabels: (showLabels) => set({ showLabels }),
   goTo: (name) => set((s) => ({ cameraPreset: { name, n: (s.cameraPreset?.n ?? 0) + 1 } })),
-  paused: false,
-  pendingTrips: [],
-  pendingResets: [],
-  sensor: null,
-  sensorAtMs: undefined,
-  phoneGps: null,
-  pendingGpsKm: 0,
-  pendingRelease: [],
-  startPhoneGps: (shipmentId) => {
-    get().stopPhoneGps();
-    if (!("geolocation" in navigator) || !window.isSecureContext) {
-      set({ phoneGps: { shipmentId, status: "unavailable", walkedM: 0, accuracyM: null } });
-      return;
-    }
-    let last: [number, number] | null = null;
-    set({ phoneGps: { shipmentId, status: "waiting", walkedM: 0, accuracyM: null } });
-    watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const here: [number, number] = [pos.coords.longitude, pos.coords.latitude];
-        const acc = pos.coords.accuracy;
-        const g = get().phoneGps;
-        if (!g) return;
-        let stepM = 0;
-        // Ignore jitter smaller than the fix's own accuracy.
-        if (last && acc < 40) {
-          const d = haversineKm(last, here) * 1000;
-          if (d > Math.max(2, acc * 0.5)) { stepM = d; last = here; }
-        } else if (!last) {
-          last = here;
-        }
-        set({
-          phoneGps: { ...g, status: "tracking", walkedM: g.walkedM + stepM, accuracyM: acc },
-          pendingGpsKm: get().pendingGpsKm + (stepM * PHONE_GPS_SCALE) / 1000,
-        });
-      },
-      (err) => {
-        const g = get().phoneGps;
-        if (g) set({ phoneGps: { ...g, status: err.code === err.PERMISSION_DENIED ? "denied" : "unavailable" } });
-      },
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
-    );
-  },
-  stopPhoneGps: () => {
-    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-    watchId = null;
-    const g = get().phoneGps;
-    set({ phoneGps: null, pendingGpsKm: 0, pendingRelease: g ? [...get().pendingRelease, g.shipmentId] : get().pendingRelease });
-  },
   setView: (view) => {
-    history.replaceState(null, "", `#${view}`);
+    history.replaceState(null, "", `${location.search}#${view}`);
     set({ view });
   },
   select: (selected) => set({ selected }),
-  setPaused: (paused) => set({ paused }),
-  trip: (id) => set((s) => ({ pendingTrips: [...s.pendingTrips, id] })),
-  reset: (id) => set((s) => ({ pendingResets: [...s.pendingResets, id] })),
-  pushSensor: (r) => set({ sensor: r, sensorAtMs: Date.now() }),
-  tick: () => {
-    const s = get();
-    if (s.paused) return;
-    const plant = step(s.plant, {
-      sensor: s.sensor,
-      sensorAtMs: s.sensorAtMs,
-      nowMs: Date.now(),
-      tripRequests: s.pendingTrips,
-      resetRequests: s.pendingResets,
-      gpsKm: s.phoneGps?.status === "tracking" ? [{ shipmentId: s.phoneGps.shipmentId, km: s.pendingGpsKm }] : undefined,
-      gpsRelease: s.pendingRelease,
-    });
-    set({ plant, pendingTrips: [], pendingResets: [], sensor: null, pendingGpsKm: 0, pendingRelease: [] });
+  act: (a) => {
+    if (get().link === "live" && socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "action", action: a }));
+      return;
+    }
+    if (a.type === "trip") queue.tripRequests.push(a.unit);
+    if (a.type === "reset") queue.resetRequests.push(a.unit);
+    if (a.type === "request") queue.newRequests.push({ asset: a.asset, reason: a.reason });
+    if (a.type === "cancel") queue.cancel.push(a.requestId);
   },
-  restart: () => set({ plant: createPlant(), pendingTrips: [], pendingResets: [] }),
+  trip: (unit) => get().act({ type: "trip", unit }),
+  reset: (unit) => get().act({ type: "reset", unit }),
 }));
 
+function localTick() {
+  const s = useStore.getState();
+  if (s.link === "live") return;
+  // Without a phone connected, the phone engineer walks on their own so a local demo still completes.
+  const phone = s.plant.engineers.find((e) => e.kind === "phone");
+  const pending = s.plant.requests.find((r) => r.engineerId === phone?.id && r.status === "dispatched");
+  if (phone && !phone.autoWalk) queue.autoWalk.push({ engineerId: phone.id, on: true });
+  if (phone && pending) queue.accept.push({ requestId: pending.id, engineerId: phone.id });
+  const onSite = s.plant.requests.find((r) => r.engineerId === phone?.id && r.status === "on-site");
+  const plant = step(s.plant, { ...queue, startRepair: onSite ? [onSite.id] : [], nowMs: Date.now() });
+  queue = emptyQueue();
+  useStore.setState({ plant });
+}
+
+// Local pages talk to the plant server on the same machine; a deployed page needs VITE_WS_URL pointing at a wss:// server.
+function serverUrl() {
+  const configured = import.meta.env.VITE_WS_URL as string | undefined;
+  if (configured) return configured;
+  if (location.protocol === "https:") return null;
+  return `ws://${location.hostname}:8787/ws`;
+}
+
+function connect() {
+  const url = serverUrl();
+  if (!url) { useStore.setState({ link: "local" }); return () => {}; }
+  let stopped = false;
+  let retry = 0;
+  const open = () => {
+    if (stopped) return;
+    let ws: WebSocket;
+    try { ws = new WebSocket(url); } catch { useStore.setState({ link: "local" }); retry = window.setTimeout(open, 5000); return; }
+    socket = ws;
+    const giveUp = window.setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) ws.close(); }, 2500);
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data as string) as { type: string; plant?: PlantState };
+      if (msg.type === "state" && msg.plant) useStore.setState({ plant: msg.plant, link: "live" });
+    };
+    ws.onclose = () => {
+      window.clearTimeout(giveUp);
+      if (socket === ws) socket = null;
+      useStore.setState({ link: "local" });
+      if (!stopped) retry = window.setTimeout(open, 5000);
+    };
+  };
+  open();
+  return () => { stopped = true; window.clearTimeout(retry); socket?.close(); };
+}
+
 export function startClock() {
-  const id = window.setInterval(() => useStore.getState().tick(), 1000);
-  return () => window.clearInterval(id);
+  const stopLink = connect();
+  const id = window.setInterval(localTick, 1000);
+  return () => { window.clearInterval(id); stopLink(); };
 }

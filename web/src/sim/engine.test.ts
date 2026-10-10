@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPlant, derateFactor, predictOverheat, splitRoute, step, WATCH_TEMP_C } from "./engine";
+import { createPlant, derateFactor, PHONE_ENGINEER, predictOverheat, REPAIR_S, step, WATCH_TEMP_C } from "./engine";
 import type { PlantState, StepInputs } from "../types";
 
 function run(state: PlantState, seconds: number, inputs: StepInputs = {}) {
@@ -85,49 +85,69 @@ describe("plant engine", () => {
   });
 });
 
-describe("shipments", () => {
-  it("phone GPS takes over a trailer and moves it along its route", () => {
-    const s0 = createPlant();
-    const before = s0.shipments[0].remainingKm;
-    const s1 = step(s0, { gpsKm: [{ shipmentId: "TRL-204", km: 5 }] });
-    expect(s1.shipments[0].source).toBe("live");
-    expect(before - s1.shipments[0].remainingKm).toBeCloseTo(5, 1);
-    const s2 = step(s1);
-    expect(s2.shipments[0].remainingKm).toBeCloseTo(s1.shipments[0].remainingKm, 5);
-    const s3 = step(s2, { gpsRelease: ["TRL-204"] });
-    expect(s3.shipments[0].source).toBe("sim");
+describe("maintenance", () => {
+  it("a trip raises a P1 request and dispatches the phone engineer first", () => {
+    let s = run(createPlant(), 30);
+    s = step(s, { tripRequests: ["GT-05"] });
+    s = step(s);
+    const r = s.requests.find((x) => x.asset === "GT-05")!;
+    expect(r.priority).toBe("P1");
+    expect(r.origin).toBe("auto");
+    expect(r.status).toBe("dispatched");
+    expect(r.engineerId).toBe(PHONE_ENGINEER);
   });
 
-  it("splits a route at the current position", () => {
-    const sh = createPlant().shipments[0];
-    const [driven, rest] = splitRoute(sh.route, 0.5);
-    expect(driven[driven.length - 1]).toEqual(rest[0]);
-    expect(rest[rest.length - 1]).toEqual(sh.route[sh.route.length - 1]);
+  it("the phone engineer walks only when GPS steps arrive, then repairs and clears the trip", () => {
+    let s = run(createPlant(), 30);
+    s = step(s, { tripRequests: ["GT-05"] });
+    s = step(s);
+    const id = s.requests.find((x) => x.asset === "GT-05")!.id;
+    s = step(s, { accept: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
+    const before = s.requests.find((x) => x.id === id)!.progress;
+    s = step(s);
+    expect(s.requests.find((x) => x.id === id)!.progress).toBe(before);
+    for (let i = 0; i < 200 && s.requests.find((x) => x.id === id)!.status === "en-route"; i++) {
+      s = step(s, { walkM: [{ engineerId: PHONE_ENGINEER, meters: 8 }] });
+    }
+    expect(s.requests.find((x) => x.id === id)!.status).toBe("on-site");
+    s = step(s, { startRepair: [id] });
+    for (let i = 0; i < REPAIR_S; i++) s = step(s);
+    expect(s.requests.find((x) => x.id === id)!.status).toBe("resolved");
+    expect(s.turbines[4].status).toBe("running");
+    expect(s.engineers.find((e) => e.id === PHONE_ENGINEER)!.status).toBe("available");
   });
-});
 
-describe("deliveries", () => {
-  it("a crew unloads an arrived truck and carries the parts to the asset", () => {
+  it("a manual request goes to a free engineer, and simulated crew finish it on their own", () => {
     let s = createPlant();
-    s = step(s, { gpsKm: [{ shipmentId: "TRL-204", km: 1000 }] });
-    expect(s.shipments[0].arrived).toBe(true);
-    let d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
-    expect(d.status).toBe("unloading");
-    expect(d.toAsset).toBe("GT-03");
-    const firstEta = d.etaMin;
-    for (let i = 0; i < 25; i++) s = step(s);
-    d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
-    expect(d.status).toBe("carrying");
-    expect(d.etaMin).toBeLessThan(firstEta);
-    for (let i = 0; i < 400 && d.status !== "delivered"; i++) { s = step(s); d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!; }
-    expect(d.status).toBe("delivered");
-    expect(d.pos).toEqual(d.path[d.path.length - 1]);
-    expect(s.events.some((e) => e.text.includes("delivered combustion liner set"))).toBe(true);
+    s = step(s, { tripRequests: ["GT-02"] });
+    s = step(s);
+    s = step(s, { newRequests: [{ asset: "switchyard", reason: "Breaker 4 alarm" }] });
+    const r = s.requests.find((x) => x.asset === "switchyard")!;
+    expect(r.origin).toBe("manual");
+    expect(r.engineerId).not.toBe(PHONE_ENGINEER);
+    for (let i = 0; i < 300 && s.requests.find((x) => x.id === r.id)!.status !== "resolved"; i++) s = step(s);
+    expect(s.requests.find((x) => x.id === r.id)!.status).toBe("resolved");
   });
 
-  it("each arrived shipment gets its own crew", () => {
+  it("GT-03's forecast raises a request before it reaches watch, and the fix stops the drift", () => {
     let s = createPlant();
-    for (const id of ["TRL-204", "TNK-118", "TRL-311"]) s = step(s, { gpsKm: [{ shipmentId: id, km: 1000 }] });
-    expect(new Set(s.deliveries.map((d) => d.crew)).size).toBe(3);
+    let raisedEarly = false;
+    for (let i = 0; i < 600; i++) {
+      s = step(s, { autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
+      const r = s.requests.find((x) => x.asset === "GT-03");
+      if (r && r.status === "dispatched") s = step(s, { accept: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
+      if (r && r.status === "on-site") s = step(s, { startRepair: [r.id] });
+      if (r && s.turbines[2].exhaustTempC < WATCH_TEMP_C && r.priority === "P3") raisedEarly = true;
+    }
+    expect(raisedEarly).toBe(true);
+    expect(s.requests.some((x) => x.asset === "GT-03" && x.status === "resolved")).toBe(true);
+    expect(s.turbines[2].status).not.toBe("tripped");
+  });
+
+  it("does not open a second request for an asset that already has one", () => {
+    let s = createPlant();
+    s = step(s, { newRequests: [{ asset: "GT-01", reason: "a" }] });
+    s = step(s, { newRequests: [{ asset: "GT-01", reason: "b" }] });
+    expect(s.requests.filter((x) => x.asset === "GT-01").length).toBe(1);
   });
 });

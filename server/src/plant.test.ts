@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import { PlantHost } from "./plant.ts";
+import { ClientMessage, SensorReading } from "./protocol.ts";
+
+describe("plant host", () => {
+  it("applies queued actions on the next tick", () => {
+    const h = new PlantHost();
+    h.tick();
+    h.apply({ type: "trip", unit: "GT-02" });
+    h.tick();
+    expect(h.plant.turbines[1].status).toBe("tripped");
+  });
+
+  it("routes sensor readings to GT-08 as live", () => {
+    const h = new PlantHost();
+    h.ingest({ device: "esp32", seq: 1, uptime_ms: 10, readings: { pressure_hpa: 990, light_raw: 2600 } }, 1000);
+    h.tick(1200);
+    expect(h.plant.turbines[7].sensors.source).toBe("live");
+    expect(h.plant.turbines[7].sensors.inletPressureHpa).toBe(990);
+  });
+});
+
+describe("phone stand-in", () => {
+  it("handles the phone engineer's job when no phone is connected", () => {
+    const h = new PlantHost();
+    h.tick();
+    h.apply({ type: "trip", unit: "GT-04" });
+    for (let i = 0; i < 400 && !h.plant.requests.some((r) => r.status === "resolved"); i++) h.tick();
+    expect(h.plant.requests[0].engineerId).toBe("ENG-1");
+    expect(h.plant.requests[0].status).toBe("resolved");
+  });
+
+  it("waits for the person once their phone is connected", () => {
+    const h = new PlantHost();
+    h.phonesOnline.add("ENG-1");
+    h.tick();
+    h.apply({ type: "trip", unit: "GT-04" });
+    for (let i = 0; i < 30; i++) h.tick();
+    expect(h.plant.requests[0].status).toBe("dispatched");
+  });
+});
+
+describe("protocol", () => {
+  it("rejects actions it does not know", () => {
+    expect(ClientMessage.safeParse({ type: "action", action: { type: "explode" } }).success).toBe(false);
+    expect(ClientMessage.safeParse({ type: "action", action: { type: "trip", unit: "GT-99" } }).success).toBe(false);
+    expect(ClientMessage.safeParse({ type: "action", action: { type: "walk", engineerId: "ENG-1", meters: 500 } }).success).toBe(false);
+  });
+
+  it("accepts the documented sensor format and rejects impossible values", () => {
+    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { pressure_hpa: 1009 } }).success).toBe(true);
+    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { pressure_hpa: 5 } }).success).toBe(false);
+  });
+});

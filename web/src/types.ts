@@ -49,44 +49,7 @@ export interface Prediction {
   risk: number;
 }
 
-export interface Shipment {
-  id: string;
-  cargo: string;
-  forAsset: string;
-  carrier: string;
-  origin: string;
-  route: [number, number][];
-  stops: { name: string; at: number }[];
-  progress: number;
-  speedKmh: number;
-  source: Source;
-  lat: number;
-  lon: number;
-  remainingKm: number;
-  etaMin: number;
-  arrived: boolean;
-  lastPingT: number | null;
-}
-
 export type Severity = "info" | "watch" | "trip";
-
-export type DeliveryStatus = "waiting" | "unloading" | "carrying" | "delivered";
-
-export interface Delivery {
-  shipmentId: string;
-  cargo: string;
-  crew: string;
-  workers: number;
-  toAsset: string;
-  toLabel: string;
-  path: [number, number][];
-  status: DeliveryStatus;
-  unloadLeftS: number;
-  progress: number;
-  pos: [number, number];
-  etaMin: number;
-  deliveredT: number | null;
-}
 
 export interface PlantEvent {
   id: number;
@@ -114,8 +77,8 @@ export interface PlantState {
   turbines: Turbine[];
   battery: Battery;
   ambient: Ambient;
-  shipments: Shipment[];
-  deliveries: Delivery[];
+  engineers: Engineer[];
+  requests: MaintenanceRequest[];
   predictions: Prediction[];
   events: PlantEvent[];
   history: HistoryPoint[];
@@ -143,7 +106,45 @@ export interface StepInputs {
   nowMs?: number;
   tripRequests?: string[];
   resetRequests?: string[];
-  gps?: { shipmentId: string; lat: number; lon: number } | null;
-  gpsKm?: { shipmentId: string; km: number }[];
-  gpsRelease?: string[];
+  // Maintenance: manual requests from the manager, and the phone engineer's actions.
+  newRequests?: { asset: string; reason: string }[];
+  accept?: { requestId: string; engineerId: string }[];
+  walkM?: { engineerId: string; meters: number }[];
+  autoWalk?: { engineerId: string; on: boolean }[];
+  startRepair?: string[];
+  cancel?: string[];
+}
+
+export type Priority = "P1" | "P2" | "P3";
+export type RequestStatus = "open" | "dispatched" | "en-route" | "on-site" | "repairing" | "resolved" | "cancelled";
+
+export interface MaintenanceRequest {
+  id: string;
+  asset: string;
+  reason: string;
+  priority: Priority;
+  origin: "auto" | "manual";
+  status: RequestStatus;
+  createdT: number;
+  engineerId: string | null;
+  dispatchedT: number | null;
+  path: [number, number][];
+  progress: number;
+  etaMin: number;
+  repairLeftS: number;
+  resolvedT: number | null;
+}
+
+export type EngineerStatus = "available" | "dispatched" | "walking" | "on-site" | "repairing";
+
+export interface Engineer {
+  id: string;
+  name: string;
+  // "phone" is the engineer carrying the mobile app; the others are simulated crew.
+  kind: "phone" | "sim";
+  status: EngineerStatus;
+  requestId: string | null;
+  pos: [number, number];
+  autoWalk: boolean;
+  lastStepT: number | null;
 }

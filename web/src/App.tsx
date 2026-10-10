@@ -1,18 +1,19 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { startClock, useStore, type CameraPreset, type View } from "./store";
 import {
-  AlarmList, AssetDetail, BalanceChart, BalanceStats, Panel, PredictionList, SensorPanel, SourceTag, TurbineStrip, UnitLoadBars, clockOf,
+  AlarmList, AssetDetail, BalanceChart, BalanceStats, Panel, PredictionList, PriorityChip, SensorPanel, SourceTag, TurbineStrip, UnitLoadBars, clockOf, requestStatusText,
 } from "./ui/parts";
-import { IconBell, IconDashboard, IconMark, IconPlant, IconTag, IconTruck } from "./ui/icons";
+import { IconBell, IconDashboard, IconMark, IconPlant, IconTag, IconWrench } from "./ui/icons";
+import { MaintenanceView } from "./views/Maintenance";
+import { Toasts } from "./ui/Toasts";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 
-const MapView = lazy(() => import("./views/MapView").then((m) => ({ default: m.MapView })));
 const PlantScene = lazy(() => import("./scene/PlantScene").then((m) => ({ default: m.PlantScene })));
 
 const VIEWS: { id: View; label: string; icon: () => React.ReactElement }[] = [
   { id: "twin", label: "Plant", icon: IconPlant },
   { id: "dashboard", label: "Dashboard", icon: IconDashboard },
-  { id: "map", label: "Shipments", icon: IconTruck },
+  { id: "maintenance", label: "Maintenance", icon: IconWrench },
 ];
 
 function Sidebar() {
@@ -50,12 +51,43 @@ function Sidebar() {
   );
 }
 
+function LinkStatus() {
+  const link = useStore((s) => s.link);
+  const text = link === "live" ? "Live: plant server" : link === "connecting" ? "Connecting" : "Local simulation";
+  return (
+    <span className="realtime" title={link === "live" ? "Shared with every connected screen and phone" : "No plant server reachable. This page runs its own copy."}>
+      <span className={`dot ${link === "live" ? "dot-live" : ""}`} aria-hidden />{text}
+    </span>
+  );
+}
+
+function MaintSummary() {
+  const requests = useStore((s) => s.plant.requests);
+  const setView = useStore((s) => s.setView);
+  const open = requests.filter((r) => r.status !== "resolved" && r.status !== "cancelled");
+  return (
+    <>
+      {open.length === 0 ? <p className="empty">No open maintenance requests. Sensors are watching every unit.</p> : (
+        <ul className="maint-mini">
+          {open.slice(0, 5).map((r) => (
+            <li key={r.id}>
+              <PriorityChip p={r.priority} />
+              <strong>{r.asset}</strong>
+              <span>{requestStatusText(r)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="actions"><button type="button" className="btn" onClick={() => setView("maintenance")}>Open maintenance</button></div>
+    </>
+  );
+}
+
 function TopBar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const t = useStore((s) => s.plant.t);
-  const source = useStore((s) => s.plant.ambient.source);
-  const alarms = useStore((s) => s.plant.turbines.filter((x) => x.status === "watch" || x.status === "tripped").length);
+  const alarms = useStore((s) => s.plant.requests.filter((r) => r.status !== "resolved" && r.status !== "cancelled").length);
   const current = VIEWS.find((v) => v.id === view)!;
   return (
     <header className="top">
@@ -68,10 +100,9 @@ function TopBar() {
         <h1 className="crumb crumb-current">{current.label}</h1>
       </div>
       <div className="top-meta">
-        <span className="realtime"><span className="dot dot-live" aria-hidden />Realtime</span>
-        <SourceTag source={source} />
+        <LinkStatus />
         <time className="clock" aria-label="Plant time">{clockOf(t)}</time>
-        <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("dashboard")} aria-label={`${alarms} active alarms`}>
+        <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("maintenance")} aria-label={`${alarms} open maintenance requests`}>
           <IconBell />
           {alarms > 0 && <span className="bell-count">{alarms}</span>}
         </button>
@@ -83,7 +114,7 @@ function TopBar() {
 const PRESETS: { id: CameraPreset; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "turbines", label: "Turbines" },
-  { id: "dock", label: "Dock" },
+  { id: "control", label: "Control room" },
   { id: "top", label: "Top" },
 ];
 
@@ -157,6 +188,7 @@ function DashboardView() {
       <Panel title="Turbine fleet" className="d-fleet"><TurbineStrip /></Panel>
       <Panel title="Selected unit" className="d-detail"><AssetDetail /></Panel>
       <Panel title="Overheat forecast" className="d-pred"><PredictionList /></Panel>
+      <Panel title="Maintenance" meta="Open requests" className="d-maint"><MaintSummary /></Panel>
       <Panel title={`${LIVE_SENSOR_UNIT} sensor board`} aside={<SourceTag source={source} />} className="d-sensors"><SensorPanel /></Panel>
     </div>
   );
@@ -169,7 +201,7 @@ export default function App() {
   useEffect(() => {
     const onHash = () => {
       const h = location.hash.replace("#", "");
-      useStore.getState().setView(h === "dashboard" || h === "map" ? h : "twin");
+      useStore.getState().setView(h === "dashboard" || h === "maintenance" ? h : "twin");
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -182,9 +214,10 @@ export default function App() {
         <main className="main">
           {view === "twin" && <TwinView />}
           {view === "dashboard" && <DashboardView />}
-          {view === "map" && <Suspense fallback={<p className="empty">Loading map</p>}><MapView /></Suspense>}
+          {view === "maintenance" && <MaintenanceView />}
         </main>
       </div>
+      <Toasts />
       <nav className="tabs" aria-label="Views">
         {VIEWS.map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" className="tab" aria-current={view === id ? "page" : undefined} onClick={() => setView(id)}>
