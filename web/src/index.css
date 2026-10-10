@@ -27,7 +27,18 @@
   --gap: 16px;
   --radius-s: 4px;
   --radius-m: 8px;
+  /* Two faces, two jobs: Archivo set wide carries headings and the numbers an operator scans for;
+     IBM Plex Sans stays quiet for everything read in sentences. */
   --font: "IBM Plex Sans", system-ui, sans-serif;
+  --display: "Archivo", "IBM Plex Sans", system-ui, sans-serif;
+  /* Type scale: each step is a clear jump, not a nudge. */
+  --fs-xs: 12px;
+  --fs-s: 13px;
+  --fs-body: 14px;
+  --fs-sub: 16px;
+  --fs-h3: 22px;
+  --fs-kpi: 28px;
+  --fs-hero: 38px;
   color-scheme: light;
 }
 
@@ -36,7 +47,7 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--ink);
-  font: 400 14px/1.45 var(--font);
+  font: 400 var(--fs-body)/1.55 var(--font);
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
 }
@@ -490,3 +501,28 @@ h1, h2, h3, h4 { margin: 0; }
 }
 .tag-crew.tag-phone { border-color: var(--accent); }
 .tag-crew.tag-phone strong { color: var(--accent); }
+
+/* display face: headings and the figures operators scan for */
+.side-brand strong, .crumb-current, .panel-head h2, .detail-head h3, .stats dd, .unit-mw, .eta-big,
+.maint-col h2, .toast strong, .req-top strong, .loadbar-val, .clock, .insp-tabs button {
+  font-family: var(--display);
+  font-stretch: 112%;
+}
+.side-brand strong { font-size: var(--fs-sub); font-weight: 800; letter-spacing: -0.01em; }
+.crumb-current { font-size: var(--fs-sub); font-weight: 700; letter-spacing: -0.005em; }
+.panel-head h2 { font-size: var(--fs-s); font-weight: 700; letter-spacing: 0.01em; }
+.panel-meta { font-size: var(--fs-xs); }
+.stats dt { font-size: var(--fs-xs); letter-spacing: 0.01em; }
+.stats dd { font-size: var(--fs-kpi); font-weight: 700; letter-spacing: -0.025em; line-height: 1.1; }
+.stats small { font-family: var(--font); font-stretch: normal; letter-spacing: 0; }
+.detail-head h3 { font-size: var(--fs-h3); font-weight: 800; letter-spacing: -0.02em; }
+.unit-mw { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; }
+.unit-mw small { font-family: var(--font); font-stretch: normal; }
+.eta-big { font-size: var(--fs-hero); font-weight: 800; letter-spacing: -0.03em; }
+.maint-col h2 { font-size: var(--fs-s); font-weight: 700; }
+.req-top strong, .toast strong { font-weight: 700; letter-spacing: -0.005em; }
+.clock { font-weight: 700; letter-spacing: -0.01em; }
+.insp-tabs button { font-weight: 700; font-size: var(--fs-s); }
+.loadbar-val { font-weight: 600; }
+.kv dd { font-weight: 600; }
+@media (max-width: 720px) { .stats dd { font-size: 20px; } }

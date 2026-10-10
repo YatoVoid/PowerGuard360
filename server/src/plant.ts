@@ -36,12 +36,18 @@ export class PlantHost {
   // so a job sent to the phone role never stalls just because nobody has the app open.
   phonesOnline = new Set<string>();
 
+  // Auto walk the server switched on itself, so it only ever switches off its own, never the person's choice.
+  private standInWalk = new Set<string>();
+
   private standIn() {
     for (const e of this.plant.engineers) {
       if (e.kind !== "phone") continue;
       const online = this.phonesOnline.has(e.id);
-      if (e.autoWalk === online) this.inputs.autoWalk.push({ engineerId: e.id, on: !online });
-      if (online) continue;
+      if (online) {
+        if (this.standInWalk.has(e.id)) { this.inputs.autoWalk.push({ engineerId: e.id, on: false }); this.standInWalk.delete(e.id); }
+        continue;
+      }
+      if (!e.autoWalk) { this.inputs.autoWalk.push({ engineerId: e.id, on: true }); this.standInWalk.add(e.id); }
       for (const r of this.plant.requests) {
         if (r.engineerId !== e.id) continue;
         if (r.status === "dispatched") this.inputs.accept.push({ requestId: r.id, engineerId: e.id });

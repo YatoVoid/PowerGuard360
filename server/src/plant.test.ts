@@ -40,6 +40,16 @@ describe("phone stand-in", () => {
   });
 });
 
+describe("auto walk", () => {
+  it("keeps the person's own auto walk on while their phone is connected", () => {
+    const h = new PlantHost();
+    h.phonesOnline.add("ENG-1");
+    h.apply({ type: "autoWalk", engineerId: "ENG-1", on: true });
+    for (let i = 0; i < 3; i++) h.tick();
+    expect(h.plant.engineers[0].autoWalk).toBe(true);
+  });
+});
+
 describe("protocol", () => {
   it("rejects actions it does not know", () => {
     expect(ClientMessage.safeParse({ type: "action", action: { type: "explode" } }).success).toBe(false);

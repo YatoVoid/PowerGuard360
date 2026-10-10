@@ -1,9 +1,5 @@
-import {
-  Barlow_400Regular, Barlow_500Medium, Barlow_600SemiBold, Barlow_700Bold,
-} from '@expo-google-fonts/barlow';
-import {
-  BarlowSemiCondensed_500Medium, BarlowSemiCondensed_600SemiBold, BarlowSemiCondensed_700Bold,
-} from '@expo-google-fonts/barlow-semi-condensed';
+import { Archivo_700Bold, Archivo_800ExtraBold } from '@expo-google-fonts/archivo';
+import { IBMPlexSans_400Regular, IBMPlexSans_500Medium, IBMPlexSans_600SemiBold, IBMPlexSans_700Bold } from '@expo-google-fonts/ibm-plex-sans';
 import { useFonts } from 'expo-font';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import * as SplashScreen from 'expo-splash-screen';
@@ -18,8 +14,8 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    Barlow_400Regular, Barlow_500Medium, Barlow_600SemiBold, Barlow_700Bold,
-    BarlowSemiCondensed_500Medium, BarlowSemiCondensed_600SemiBold, BarlowSemiCondensed_700Bold,
+    Archivo_700Bold, Archivo_800ExtraBold,
+    IBMPlexSans_400Regular, IBMPlexSans_500Medium, IBMPlexSans_600SemiBold, IBMPlexSans_700Bold,
   });
   useEffect(() => startClock(), []);
   useEffect(() => { prepareNotifications(); }, []);

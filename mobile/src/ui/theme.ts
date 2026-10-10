@@ -15,13 +15,14 @@ export const C = {
   battery: '#6f9a5b',
 };
 
+// Same pairing as the website: Archivo for headings and the numbers people scan for, IBM Plex Sans for reading.
 export const F = {
-  regular: 'Barlow_400Regular',
-  medium: 'Barlow_500Medium',
-  semibold: 'Barlow_600SemiBold',
-  bold: 'Barlow_700Bold',
-  num: 'BarlowSemiCondensed_600SemiBold',
-  numBold: 'BarlowSemiCondensed_700Bold',
+  regular: 'IBMPlexSans_400Regular',
+  medium: 'IBMPlexSans_500Medium',
+  semibold: 'IBMPlexSans_600SemiBold',
+  bold: 'IBMPlexSans_700Bold',
+  num: 'Archivo_700Bold',
+  numBold: 'Archivo_800ExtraBold',
 };
 
 export const S = { gutter: 16, gap: 12, radius: 6, radiusS: 3 };
