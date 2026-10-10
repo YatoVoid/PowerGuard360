@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Line, OrbitControls, PerformanceMonitor, Sky } from "@react-three/drei";
+import { Html, Line, OrbitControls, Sky } from "@react-three/drei";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -732,15 +732,27 @@ function Scene() {
   );
 }
 
+// The scene's motion is slow (fans, plumes, power flow), so 30 fps looks the same and costs half.
+// Camera drags still render immediately: the controls request their own frames.
+function FrameCap({ fps }: { fps: number }) {
+  const invalidate = useThree((s) => s.invalidate);
+  useEffect(() => {
+    const id = window.setInterval(() => invalidate(), 1000 / fps);
+    return () => window.clearInterval(id);
+  }, [invalidate, fps]);
+  return null;
+}
+
 export function PlantScene() {
   const controls = useRef<OrbitControlsImpl>(null);
   const select = useStore((s) => s.select);
-  // Start sharp, then drop resolution if the machine can't hold a smooth frame rate.
-  const [dpr, setDpr] = useState(Math.min(window.devicePixelRatio, 1.5));
+  // Fixed for the session: changing resolution mid-run reallocates every buffer and stalls for about a second.
+  const dpr = Math.min(window.devicePixelRatio, 1.5);
   return (
     <Canvas
       shadows={{ type: THREE.PCFShadowMap }}
       dpr={dpr}
+      frameloop="demand"
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.9 }}
       camera={{ position: [190, 160, 260], fov: 34, near: 1, far: 1800 }}
       onPointerMissed={(e) => {
@@ -748,12 +760,7 @@ export function PlantScene() {
         if (isTap(e as PointerEvent)) select(null);
       }}
     >
-      <PerformanceMonitor
-        onDecline={() => setDpr((d) => Math.max(0.75, d - 0.25))}
-        onIncline={() => setDpr((d) => Math.min(Math.min(window.devicePixelRatio, 1.5), d + 0.25))}
-        flipflops={3}
-        onFallback={() => setDpr(1)}
-      />
+      <FrameCap fps={30} />
       <Scene />
       <FitToScreen />
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
