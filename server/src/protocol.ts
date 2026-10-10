@@ -23,16 +23,19 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hello"), role: z.literal("phone"), engineerId: id }),
 ]);
 
-// Same shape firmware/README.md documents for the ESP32.
+// Same shape firmware/README.md documents: the six AI4I features, measured by the board for GT-08.
+// Ranges are the physical bounds of each reading, wide enough for real sensors and the dataset alike.
 export const SensorReading = z.object({
   device: z.string().max(40),
   seq: z.number().int().nonnegative(),
   uptime_ms: z.number().nonnegative(),
   readings: z.object({
-    air_quality_raw: z.number().finite().optional(),
-    pressure_hpa: z.number().min(300).max(1100).optional(),
-    temperature_c: z.number().min(-40).max(85).optional(),
-    light_raw: z.number().finite().min(0).optional(),
+    type: z.enum(["L", "M", "H"]).optional(),
+    air_temp_k: z.number().min(250).max(350).optional(),
+    process_temp_k: z.number().min(250).max(400).optional(),
+    rpm: z.number().min(0).max(5000).optional(),
+    torque_nm: z.number().min(0).max(200).optional(),
+    tool_wear_min: z.number().min(0).max(500).optional(),
   }),
 });
 export type SensorReading = z.infer<typeof SensorReading>;

@@ -11,7 +11,7 @@ import { C, S } from '@/ui/theme';
 export default function Dashboard() {
   const history = useStore((s) => s.plant.history);
   const events = useStore((s) => s.plant.events);
-  const source = useStore((s) => s.plant.ambient.source);
+  const source = useStore((s) => s.plant.board.source);
   const scroll = useRef<ScrollView>(null);
   const detailY = useRef(0);
   return (
@@ -31,7 +31,7 @@ export default function Dashboard() {
           <Panel title="Selected unit"><TurbineDetail /></Panel>
         </View>
         <Panel title="Alarms and events"><Alarms events={events} limit={8} /></Panel>
-        <Panel title="Overheat forecast"><Predictions /></Panel>
+        <Panel title="Failure forecast"><Predictions /></Panel>
         <Panel title="GT-08 sensor board" aside={<SourceTag source={source} />}><Sensors /></Panel>
       </ScrollView>
     </SafeAreaView>

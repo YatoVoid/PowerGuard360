@@ -11,12 +11,12 @@ describe("plant host", () => {
     expect(h.plant.turbines[1].status).toBe("tripped");
   });
 
-  it("routes sensor readings to GT-08 as live", () => {
+  it("routes the board's six readings to GT-08 as live", () => {
     const h = new PlantHost();
-    h.ingest({ device: "esp32", seq: 1, uptime_ms: 10, readings: { pressure_hpa: 990, light_raw: 2600 } }, 1000);
+    h.ingest({ device: "esp32", seq: 1, uptime_ms: 10, readings: { type: "M", air_temp_k: 299, process_temp_k: 309.4, rpm: 1500, torque_nm: 41, tool_wear_min: 20 } }, 1000);
     h.tick(1200);
-    expect(h.plant.turbines[7].sensors.source).toBe("live");
-    expect(h.plant.turbines[7].sensors.inletPressureHpa).toBe(990);
+    expect(h.plant.turbines[7].source).toBe("live");
+    expect(h.plant.turbines[7].features.rpm).toBe(1500);
   });
 });
 
@@ -25,7 +25,7 @@ describe("phone stand-in", () => {
     const h = new PlantHost();
     h.tick();
     h.apply({ type: "trip", unit: "GT-04" });
-    for (let i = 0; i < 400 && !h.plant.requests.some((r) => r.status === "resolved"); i++) h.tick();
+    for (let i = 0; i < 600 && !h.plant.requests.some((r) => r.status === "resolved"); i++) h.tick();
     expect(h.plant.requests[0].engineerId).toBe("ENG-1");
     expect(h.plant.requests[0].status).toBe("resolved");
   });
@@ -58,7 +58,8 @@ describe("protocol", () => {
   });
 
   it("accepts the documented sensor format and rejects impossible values", () => {
-    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { pressure_hpa: 1009 } }).success).toBe(true);
-    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { pressure_hpa: 5 } }).success).toBe(false);
+    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { air_temp_k: 300, rpm: 1500 } }).success).toBe(true);
+    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { air_temp_k: 5 } }).success).toBe(false);
+    expect(SensorReading.safeParse({ device: "d", seq: 1, uptime_ms: 1, readings: { type: "X" } }).success).toBe(false);
   });
 });

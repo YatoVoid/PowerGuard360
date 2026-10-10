@@ -297,7 +297,7 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
           <Label id={tb.id} className={`tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
-            {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.sensors.source === "live" ? "is-on" : ""}`}>{tb.sensors.source === "live" ? "live sensors" : "sensors offline"}</em>}
+            {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.source === "live" ? "is-on" : ""}`}>{tb.source === "live" ? "live sensors" : "sensors offline"}</em>}
           </Label>
         </Html>
       </group>

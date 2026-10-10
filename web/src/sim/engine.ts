@@ -1,22 +1,32 @@
 import type {
-  Ambient, Engineer, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Severity, StepInputs, Turbine, TurbineSensors,
+  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Severity, StepInputs, Turbine,
 } from "../types";
 import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
+import {
+  FAILURE_NAME, HDF_GAP_K, HDF_RPM, OSF_LIMIT, PWF_MAX_W, PWF_MIN_W, TWF_PER_ROW, TWF_WEAR_MIN, WINDOWS,
+  failureProbability, rowFailure, rowFeatures, shaftPowerW,
+} from "./model";
 
-// All plant numbers here are illustrative. Real turbine data replaces this module's output later;
-// the screens only read PlantState.
+// Machine readings come from the AI4I 2020 dataset (see data/README.md). Only power demand and turbine
+// output are modelled, because the dataset has no power-plant load.
 
 export const RATED_MW = 335;
 export const TURBINE_COUNT = 8;
-export const WATCH_TEMP_C = 640;
-export const TRIP_TEMP_C = 660;
-export const LIGHT_TRIP_THRESHOLD = 300;
-const RAMP_MW_PER_S = 18;
+// One dataset row is replayed per unit every few seconds.
+export const ROW_SECONDS = 8;
 const HISTORY_LEN = 300;
-const TEMP_HISTORY_LEN = 180;
+const RISK_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
-// The sensor board on the table feeds GT-08; every other unit's sensors are simulated.
+// Raise a P3 request when a failure is forecast within this many minutes.
+export const REQUEST_LEAD_MIN = 2;
+export const WATCH_RISK = 0.5;
+// Torque spread across the dataset, used to judge the chance that the next cut overstrains the tool.
+const TORQUE_MEAN = 40;
+const TORQUE_SD = 10;
+const WEAR_PER_ROW = 2.5;
+
+// The sensor board on the table feeds GT-08; every other unit replays the dataset.
 export const LIVE_SENSOR_UNIT = "GT-08";
 // Walking pace on site, replayed faster for the demo.
 export const WALK_M_PER_S = 1.3;
@@ -35,7 +45,6 @@ function initialEngineers(): Engineer[] {
     { id: "ENG-3", name: "J. Chen", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
   ];
 }
-
 
 export function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -57,8 +66,9 @@ export function haversineKm(a: [number, number], b: [number, number]) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export function derateFactor(pressureHpa: number, temperatureC: number) {
-  return Math.max(0.6, Math.min(1.05, (pressureHpa / 1013.25) * (1 - 0.006 * (temperatureC - 15))));
+// Gas turbines lose roughly 0.6% of output per degree of inlet air above 15 °C.
+export function derateFactor(airTempK: number) {
+  return Math.max(0.6, Math.min(1.05, 1 - 0.006 * (airTempK - 273.15 - 15)));
 }
 
 function demandAt(t: number, rnd: () => number) {
@@ -69,7 +79,24 @@ function demandAt(t: number, rnd: () => number) {
   return slow + burst + (rnd() - 0.5) * 24;
 }
 
+const unitIndex = (tb: Turbine) => Number(tb.id.slice(3)) - 1;
+
+// Where each unit starts in its tool life, staggered so units don't all reach end of life together.
+// GT-03 starts close enough to its recorded overstrain failure for the forecast to matter early in a demo.
+function startRow(i: number) {
+  const [start, end] = WINDOWS[i];
+  if (i === 2) return Math.max(start, end - 1 - 48);
+  return start + Math.floor(((i * 17) % 40) / 100 * (end - start));
+}
+
+function fitNewTool(tb: Turbine) {
+  tb.row = WINDOWS[unitIndex(tb)][0];
+  tb.features = rowFeatures(tb.row);
+}
+
 function makeTurbine(i: number): Turbine {
+  const row = startRow(i);
+  const features = rowFeatures(row);
   return {
     id: `GT-${String(i + 1).padStart(2, "0")}`,
     status: "running",
@@ -77,30 +104,88 @@ function makeTurbine(i: number): Turbine {
     outputMw: 260,
     capacityMw: RATED_MW,
     ratedMw: RATED_MW,
-    exhaustTempC: 585 + i * 1.5,
-    vibrationMmS: 2.4 + (i % 3) * 0.3,
-    rpm: 3600,
-    fuelFlowKgS: 15,
-    efficiencyPct: 38.5,
-    runHours: 4200 + i * 611,
-    sensors: { inletPressureHpa: 1009.2 + (i % 3) * 0.2, inletTempC: 32 + (i % 4) * 0.4, airQualityRaw: 130 + i * 4, flameRaw: 2780, source: "sim" },
+    features,
+    shaftPowerKw: shaftPowerW(features) / 1000,
+    source: "sim",
+    row,
   };
 }
 
-function simSensors(tb: Turbine, i: number, t: number, rnd: () => number, running: boolean): TurbineSensors {
-  return {
-    inletPressureHpa: 1009.2 + 0.6 * Math.sin(t / 400) + (i % 3) * 0.2 + (rnd() - 0.5) * 0.1,
-    inletTempC: 32 + (i % 4) * 0.4 + 0.8 * Math.sin(t / 600) + (rnd() - 0.5) * 0.2,
-    airQualityRaw: Math.max(40, tb.sensors.airQualityRaw + (130 + i * 4 - tb.sensors.airQualityRaw) * 0.05 + (rnd() - 0.5) * 5),
-    flameRaw: running ? 2780 + (rnd() - 0.5) * 60 : 40,
-    source: "sim",
+const normalTail = (z: number) => 0.5 * erfc(z / Math.SQRT2);
+function erfc(x: number) {
+  // Abramowitz and Stegun 7.1.26
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
+  return x >= 0 ? y : 2 - y;
+}
+
+// Forecast for one unit from its current six features, using the dataset's own failure mechanics:
+// - the trained tree scores the current reading (catches heat dissipation and power failures as they form),
+// - overstrain: chance that an upcoming cut's torque crosses limit / wear as the tool keeps wearing,
+// - tool wear: the dataset's failure rate once a tool passes 200 minutes.
+export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Prediction {
+  const probability = failureProbability(f);
+  const limit = OSF_LIMIT[f.type];
+  const rowsPerMin = 60 / ROW_SECONDS;
+  const rate = Math.max(0.5, wearPerRow);
+
+  const rowRisk = (k: number) => {
+    const wear = f.toolWearMin + k * rate;
+    const osf = wear > 0 ? normalTail((limit / wear - TORQUE_MEAN) / TORQUE_SD) : 0;
+    const twf = wear >= TWF_WEAR_MIN ? TWF_PER_ROW : 0;
+    return { osf, twf };
   };
+  let surviveOsf = 1, surviveTwf = 1;
+  let nextMinOsf = 0, nextMinTwf = 0;
+  let firstOsf: number | null = null, firstTwf: number | null = null;
+  for (let k = 1; k <= 20 * rowsPerMin; k++) {
+    const r = rowRisk(k);
+    surviveOsf *= 1 - r.osf;
+    surviveTwf *= 1 - r.twf;
+    if (k === rowsPerMin) { nextMinOsf = 1 - surviveOsf; nextMinTwf = 1 - surviveTwf; }
+    if (firstOsf === null && 1 - surviveOsf >= 0.5) firstOsf = k / rowsPerMin;
+    if (firstTwf === null && 1 - surviveTwf >= 0.5) firstTwf = k / rowsPerMin;
+  }
+  const strainPct = Math.round(((f.toolWearMin * TORQUE_MEAN) / limit) * 100);
+  const options = [
+    { mode: "OSF" as const, risk: nextMinOsf, min: firstOsf, detail: `Overstrain likely in about ${fmtMin(firstOsf)}: at ${Math.round(f.toolWearMin)} min of tool wear a typical cut is at ${strainPct}% of the ${limit.toLocaleString("en-US")} limit` },
+    { mode: "TWF" as const, risk: nextMinTwf, min: firstTwf, detail: f.toolWearMin >= TWF_WEAR_MIN ? `Tool at ${Math.round(f.toolWearMin)} min of wear, past its 200 min end of life` : `Tool reaches end of life in about ${fmtMin(firstTwf)} (${Math.round(f.toolWearMin)} of 200 min)` },
+  ];
+  const soonest = options.filter((o) => o.min !== null).sort((a, b) => (a.min ?? 0) - (b.min ?? 0))[0];
+  const worst = [...options].sort((a, b) => b.risk - a.risk)[0];
+  const risk = Math.min(1, Math.max(probability, worst.risk));
+  const lead = probability >= worst.risk && probability >= 0.3 ? null : soonest ?? worst;
+  return {
+    turbineId: id,
+    probability,
+    mode: lead?.mode ?? null,
+    minutesToFailure: soonest?.min ?? null,
+    risk: Math.round(risk * 100) / 100,
+    detail: lead ? lead.detail : `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`,
+  };
+}
+
+function fmtMin(min: number | null) {
+  if (min === null) return "more than 20 min";
+  return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${min.toFixed(1)} min`;
+}
+
+function applyBoard(prev: Board, inputs: StepInputs): Board {
+  const now = inputs.nowMs ?? 0;
+  const r = inputs.sensor?.readings;
+  if (r && inputs.sensorAtMs !== undefined) {
+    const base = prev.features;
+    const ok = r.air_temp_k !== undefined && r.process_temp_k !== undefined && r.rpm !== undefined && r.torque_nm !== undefined && r.tool_wear_min !== undefined;
+    const features: Features | null = ok
+      ? { type: r.type ?? base?.type ?? "L", airTempK: r.air_temp_k!, processTempK: r.process_temp_k!, rpm: r.rpm!, torqueNm: r.torque_nm!, toolWearMin: r.tool_wear_min! }
+      : base;
+    return { features, lastSeenMs: inputs.sensorAtMs, source: features && now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim" };
+  }
+  return { ...prev, source: prev.features && prev.lastSeenMs !== null && now - prev.lastSeenMs < SENSOR_STALE_MS ? "live" : "sim" };
 }
 
 export function createPlant(seed = 7): PlantState {
   const turbines = Array.from({ length: TURBINE_COUNT }, (_, i) => makeTurbine(i));
-  const tempHistory: Record<string, number[]> = {};
-  for (const tb of turbines) tempHistory[tb.id] = [];
   return {
     t: 0,
     seed,
@@ -110,61 +195,14 @@ export function createPlant(seed = 7): PlantState {
     reserveMw: 0,
     turbines,
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
-    ambient: { pressureHpa: 1009.2, temperatureC: 31, airQualityRaw: 140, lightRaw: 2800, source: "sim", lastSeenMs: null },
+    board: { source: "sim", lastSeenMs: null, features: null },
     engineers: initialEngineers(),
     requests: [],
     predictions: [],
-    events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the site sensor board when it is connected` }],
+    events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the sensor board when it is connected` }],
     history: [],
-    tempHistory,
-    excessHistory: {},
-    simWear: {},
-    expectedExhaustC: Object.fromEntries(turbines.map((tb) => [tb.id, tb.exhaustTempC])),
+    riskHistory: Object.fromEntries(turbines.map((tb) => [tb.id, []])),
   };
-}
-
-// Exhaust temperature a healthy unit settles at for a given load.
-export function healthyExhaustC(load: number) {
-  return 560 + 45 * load;
-}
-
-// Watches how far a unit runs above a healthy unit at the same load ("excess"). Load swings move both
-// together, so only real degradation makes the excess climb. Stand-in until the ML model is trained on real data.
-export function predictOverheat(id: string, temps: number[], excess: number[]): Prediction {
-  const none: Prediction = { turbineId: id, issue: "overheat", minutesToLimit: null, risk: 0 };
-  if (excess.length < 60 || temps.length === 0) return none;
-  const recent = excess.slice(-60);
-  const n = recent.length;
-  let sx = 0, sy = 0, sxy = 0, sxx = 0;
-  for (let i = 0; i < n; i++) { sx += i; sy += recent[i]; sxy += i * recent[i]; sxx += i * i; }
-  const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-  const last = temps[temps.length - 1];
-  const headroom = TRIP_TEMP_C - last;
-  // Require a real rise, not a tilt in the noise, and only surface what an operator can act on soon.
-  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-  const rise = mean(recent.slice(-15)) - mean(recent.slice(0, 15));
-  const runningHot = recent[n - 1] > 4;
-  const minutes = runningHot && slope > 0.03 && rise > 2.5 && headroom > 0 ? headroom / slope / 60 : null;
-  const minutesToLimit = minutes !== null && minutes <= 20 ? minutes : null;
-  const proximity = Math.min(1, Math.max(0, (last - 610) / (TRIP_TEMP_C - 610)));
-  const urgency = minutesToLimit === null ? 0 : Math.min(1, 10 / Math.max(minutesToLimit, 0.5));
-  return { turbineId: id, issue: "overheat", minutesToLimit, risk: Math.round(100 * Math.max(proximity * 0.6, urgency)) / 100 };
-}
-
-function applySensor(prev: Ambient, inputs: StepInputs): Ambient {
-  const now = inputs.nowMs ?? 0;
-  const r = inputs.sensor?.readings;
-  if (r && inputs.sensorAtMs !== undefined) {
-    return {
-      pressureHpa: r.pressure_hpa ?? prev.pressureHpa,
-      temperatureC: r.temperature_c ?? prev.temperatureC,
-      airQualityRaw: r.air_quality_raw ?? prev.airQualityRaw,
-      lightRaw: r.light_raw ?? prev.lightRaw,
-      source: now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim",
-      lastSeenMs: inputs.sensorAtMs,
-    };
-  }
-  return { ...prev, source: prev.lastSeenMs !== null && now - prev.lastSeenMs < SENSOR_STALE_MS ? "live" : "sim" };
 }
 
 export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
@@ -174,19 +212,11 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   let nextEventId = (prev.events[0]?.id ?? 0) + 1;
   const log = (severity: Severity, asset: string, text: string) => events.push({ id: nextEventId++, t, severity, asset, text });
 
-  let ambient = applySensor(prev.ambient, inputs);
-  if (ambient.source === "sim") {
-    ambient = {
-      ...ambient,
-      pressureHpa: ambient.pressureHpa + (1009.2 - ambient.pressureHpa) * 0.02 + (rnd() - 0.5) * 0.15,
-      airQualityRaw: Math.max(40, ambient.airQualityRaw + (rnd() - 0.5) * 6),
-    };
-  }
+  const board = applyBoard(prev.board, inputs);
   const demandMw = demandAt(t, rnd);
-
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
-  const simWear = { ...prev.simWear };
-  const expected = { ...prev.expectedExhaustC };
+  const advanceRow = t % ROW_SECONDS === 0;
+  const wearRate: Record<string, number> = {};
 
   for (const id of inputs.tripRequests ?? []) {
     const tb = turbines.find((x) => x.id === id);
@@ -199,68 +229,79 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     const tb = turbines.find((x) => x.id === id);
     if (tb && tb.status === "tripped") {
       tb.status = "running"; tb.tripCause = null;
-      simWear[tb.id] = 0;
       log("info", tb.id, `${tb.id} reset and restarting`);
     }
   }
 
-  turbines.forEach((tb, i) => {
-    const running = tb.status === "running" || tb.status === "watch";
-    if (tb.id === LIVE_SENSOR_UNIT && ambient.source === "live") {
-      tb.sensors = {
-        inletPressureHpa: ambient.pressureHpa,
-        inletTempC: ambient.temperatureC,
-        airQualityRaw: ambient.airQualityRaw,
-        flameRaw: ambient.lightRaw,
-        source: "live",
-      };
+  for (const tb of turbines) {
+    const i = unitIndex(tb);
+    const before = tb.features;
+    if (tb.id === LIVE_SENSOR_UNIT && board.source === "live" && board.features) {
+      tb.features = board.features;
+      tb.source = "live";
+      tb.row = null;
     } else {
-      tb.sensors = simSensors(tb, i, t, rnd, running);
+      if (tb.row === null) tb.row = startRow(i);
+      tb.source = "sim";
+      // A tripped unit holds its last reading until someone fixes or resets it.
+      if (advanceRow && tb.status !== "tripped") {
+        const [start, end] = WINDOWS[i];
+        tb.row += 1;
+        if (tb.row >= end) {
+          tb.row = start;
+          log("info", tb.id, `${tb.id} tool changed at end of life, wear back to ${Math.round(rowFeatures(start).toolWearMin)} min`);
+        }
+        const failure = rowFailure(tb.row);
+        tb.features = rowFeatures(tb.row);
+        if (failure) {
+          tb.status = "tripped"; tb.tripCause = FAILURE_NAME[failure]; tb.outputMw = 0;
+          log("trip", tb.id, `${tb.id} tripped: ${FAILURE_NAME[failure].toLowerCase()} (dataset row ${tb.row + 1})`);
+        }
+      }
     }
-    // Each unit's capacity follows its own inlet air: thinner, hotter air makes less power.
-    tb.capacityMw = tb.ratedMw * derateFactor(tb.sensors.inletPressureHpa, tb.sensors.inletTempC);
-  });
+    const grew = tb.features.toolWearMin - before.toolWearMin;
+    wearRate[tb.id] = grew > 0 && grew < 20 ? grew : WEAR_PER_ROW;
+    tb.shaftPowerKw = shaftPowerW(tb.features) / 1000;
+    tb.capacityMw = tb.ratedMw * derateFactor(tb.features.airTempK);
+  }
 
-  // The light sensor is GT-08's flame detector: cover it and the unit trips.
-  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT);
-  if (live && live.sensors.source === "live" && live.sensors.flameRaw < LIGHT_TRIP_THRESHOLD && (live.status === "running" || live.status === "watch")) {
-    live.status = "tripped"; live.tripCause = "Flame detector lost signal"; live.outputMw = 0;
-    log("trip", live.id, `${live.id} tripped: flame detector lost signal`);
+  // Live board: trip on the same rules the dataset uses to label failures.
+  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT && x.source === "live");
+  if (live && (live.status === "running" || live.status === "watch")) {
+    const f = live.features;
+    const w = shaftPowerW(f);
+    const mode = f.toolWearMin * f.torqueNm > OSF_LIMIT[f.type] ? "OSF"
+      : f.processTempK - f.airTempK < HDF_GAP_K && f.rpm < HDF_RPM ? "HDF"
+      : w < PWF_MIN_W || w > PWF_MAX_W ? "PWF" : null;
+    if (mode) {
+      live.status = "tripped"; live.tripCause = FAILURE_NAME[mode]; live.outputMw = 0;
+      log("trip", live.id, `${live.id} tripped: ${FAILURE_NAME[mode].toLowerCase()} on live sensor readings`);
+    }
+  }
+
+  const predictions: Prediction[] = turbines
+    .filter((x) => x.status !== "tripped" && x.status !== "offline")
+    .map((x) => forecast(x.id, x.features, wearRate[x.id]))
+    .sort((a, b) => b.risk - a.risk);
+
+  for (const tb of turbines) {
+    const p = predictions.find((x) => x.turbineId === tb.id);
+    if (tb.status === "running" && p && p.risk >= WATCH_RISK) {
+      tb.status = "watch";
+      log("watch", tb.id, `${tb.id} on watch: ${p.detail}`);
+    } else if (tb.status === "watch" && (!p || p.risk < WATCH_RISK - 0.1)) {
+      tb.status = "running";
+      log("info", tb.id, `${tb.id} back to normal`);
+    }
   }
 
   const available = turbines.filter((x) => x.status === "running" || x.status === "watch");
   const share = available.length ? demandMw / available.length : 0;
-
   for (const tb of turbines) {
     const running = tb.status === "running" || tb.status === "watch";
     const target = running ? Math.min(share, tb.capacityMw) : 0;
-    const delta = Math.max(-RAMP_MW_PER_S, Math.min(RAMP_MW_PER_S, target - tb.outputMw));
+    const delta = Math.max(-18, Math.min(18, target - tb.outputMw));
     tb.outputMw = running ? Math.max(0, tb.outputMw + delta) : 0;
-    const load = tb.outputMw / tb.ratedMw;
-
-    // GT-03 carries a slowly failing combustion liner, which is why its spare is on the truck.
-    if (tb.id === "GT-03" && running) simWear[tb.id] = (simWear[tb.id] ?? 0) + 0.11;
-    const healthy = running ? healthyExhaustC(load) : 120;
-    tb.exhaustTempC += (healthy + (simWear[tb.id] ?? 0) - tb.exhaustTempC) * 0.08 + (rnd() - 0.5) * 1.2;
-    // The healthy reference follows the same thermal lag, so bursts in load don't show up as excess.
-    expected[tb.id] = (expected[tb.id] ?? tb.exhaustTempC) + (healthy - (expected[tb.id] ?? tb.exhaustTempC)) * 0.08;
-    tb.vibrationMmS = running ? Math.max(0.5, 2.2 + load * 1.1 + (tb.exhaustTempC > WATCH_TEMP_C ? 1.6 : 0) + (rnd() - 0.5) * 0.3) : 0.1;
-    tb.rpm = running ? 3600 + (rnd() - 0.5) * 4 : Math.max(0, tb.rpm * 0.9);
-    tb.efficiencyPct = running ? 30 + 9.5 * Math.min(load, 1) - (tb.exhaustTempC > WATCH_TEMP_C ? 1.2 : 0) : 0;
-    // Fuel heat input (MW) / LHV of natural gas (~47 MJ/kg) = kg/s
-    tb.fuelFlowKgS = running && tb.efficiencyPct > 0 ? tb.outputMw / (tb.efficiencyPct / 100) / 47 : 0;
-    if (running) tb.runHours += 1 / 3600;
-
-    if (running && tb.exhaustTempC >= TRIP_TEMP_C) {
-      tb.status = "tripped"; tb.tripCause = "Exhaust over-temperature"; tb.outputMw = 0;
-      log("trip", tb.id, `${tb.id} tripped: exhaust ${tb.exhaustTempC.toFixed(0)} °C over limit`);
-    } else if (tb.status === "running" && tb.exhaustTempC >= WATCH_TEMP_C) {
-      tb.status = "watch";
-      log("watch", tb.id, `${tb.id} exhaust temperature above ${WATCH_TEMP_C} °C`);
-    } else if (tb.status === "watch" && tb.exhaustTempC < WATCH_TEMP_C - 5) {
-      tb.status = "running";
-      log("info", tb.id, `${tb.id} exhaust temperature back to normal`);
-    }
   }
 
   const outputMw = turbines.reduce((s, x) => s + x.outputMw, 0);
@@ -275,24 +316,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const gridMw = Math.max(0, gap - Math.max(0, batteryMw));
   if (gridMw > 1 && prev.gridMw <= 1) log("watch", "Grid", `Importing ${gridMw.toFixed(0)} MW from the grid`);
   if (batteryMw > 150 && prev.battery.powerMw <= 150) log("info", "Battery", `Battery covering ${batteryMw.toFixed(0)} MW`);
-
   const reserveMw = available.reduce((s, x) => s + x.capacityMw, 0) - outputMw + battery.maxPowerMw * (battery.socPct > 10 ? 1 : 0);
-
-  const tempHistory: Record<string, number[]> = {};
-  const excessHistory: Record<string, number[]> = {};
-  for (const tb of turbines) {
-    const h = prev.tempHistory[tb.id] ?? [];
-    tempHistory[tb.id] = [...h.slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC];
-    const running = tb.status === "running" || tb.status === "watch";
-    // A stopped unit has no meaningful excess; restart its history so cool-down doesn't read as a trend.
-    excessHistory[tb.id] = running
-      ? [...(prev.excessHistory[tb.id] ?? []).slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC - expected[tb.id]]
-      : [];
-  }
-  const predictions = turbines
-    .filter((x) => x.status === "running" || x.status === "watch")
-    .map((x) => predictOverheat(x.id, tempHistory[x.id], excessHistory[x.id]))
-    .sort((a, b) => b.risk - a.risk);
 
   // Maintenance: raise requests from what the sensors show, dispatch engineers, walk, repair.
   const engineers = prev.engineers.map((e) => ({ ...e }));
@@ -322,8 +346,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     let reason = "";
     const pred = predictions.find((p) => p.turbineId === tb.id);
     if (tb.status === "tripped") { priority = "P1"; reason = `Tripped: ${(tb.tripCause ?? "unknown cause").toLowerCase()}`; }
-    else if (tb.status === "watch") { priority = "P2"; reason = `Exhaust ${tb.exhaustTempC.toFixed(0)} °C, above the ${WATCH_TEMP_C} °C watch limit`; }
-    else if (pred && pred.minutesToLimit !== null && !recentlyFixed(tb.id)) { priority = "P3"; reason = `Overheat forecast in about ${pred.minutesToLimit.toFixed(1)} min`; }
+    else if (tb.status === "watch" && pred) { priority = "P2"; reason = pred.detail; }
+    else if (pred && pred.minutesToFailure !== null && pred.minutesToFailure <= REQUEST_LEAD_MIN && !recentlyFixed(tb.id)) { priority = "P3"; reason = pred.detail; }
     if (!priority) continue;
     const existing = openFor(tb.id);
     if (!existing) create(tb.id, reason, priority, "auto");
@@ -401,8 +425,9 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
         e.status = "available"; e.requestId = null;
         const tb = turbines.find((x) => x.id === r.asset);
         if (tb) {
-          simWear[tb.id] = 0;
-          if (tb.status === "tripped") { tb.status = "running"; tb.tripCause = null; }
+          // The repair fits a new tool, so replay continues from the start of this unit's tool life.
+          fitNewTool(tb);
+          tb.status = "running"; tb.tripCause = null;
         }
         log("info", r.asset, `${r.id} resolved: ${e.name} fixed ${assetLabel(r.asset)}`);
       }
@@ -411,6 +436,11 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     r.etaMin = (walkLeft + (r.status === "resolved" ? 0 : r.repairLeftS)) / 60;
   }
 
+  const riskHistory: Record<string, number[]> = {};
+  for (const tb of turbines) {
+    const p = predictions.find((x) => x.turbineId === tb.id);
+    riskHistory[tb.id] = [...(prev.riskHistory[tb.id] ?? []).slice(-(RISK_HISTORY_LEN - 1)), tb.status === "tripped" ? 1 : p?.risk ?? 0];
+  }
   const point: HistoryPoint = { t, demandMw, outputMw, batteryMw, gridMw };
 
   return {
@@ -422,16 +452,12 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     reserveMw,
     turbines,
     battery,
-    ambient,
+    board,
     engineers,
     requests,
     predictions,
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],
-    tempHistory,
-    excessHistory,
-    simWear,
-    expectedExhaustC: expected,
+    riskHistory,
   };
 }
-

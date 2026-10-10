@@ -2,12 +2,17 @@ export type Source = "live" | "sim";
 
 export type TurbineStatus = "running" | "watch" | "tripped" | "offline";
 
-export interface TurbineSensors {
-  inletPressureHpa: number;
-  inletTempC: number;
-  airQualityRaw: number;
-  flameRaw: number;
-  source: Source;
+export type MachineType = "L" | "M" | "H";
+export type FailureMode = "TWF" | "HDF" | "PWF" | "OSF" | "RNF";
+
+// The six input features of the AI4I 2020 dataset, in its own units.
+export interface Features {
+  type: MachineType;
+  airTempK: number;
+  processTempK: number;
+  rpm: number;
+  torqueNm: number;
+  toolWearMin: number;
 }
 
 export interface Turbine {
@@ -17,22 +22,19 @@ export interface Turbine {
   outputMw: number;
   capacityMw: number;
   ratedMw: number;
-  exhaustTempC: number;
-  vibrationMmS: number;
-  rpm: number;
-  fuelFlowKgS: number;
-  efficiencyPct: number;
-  runHours: number;
-  sensors: TurbineSensors;
+  features: Features;
+  // Mechanical power from torque and speed, the quantity the dataset's power-failure rule uses.
+  shaftPowerKw: number;
+  // "live" when the features come from the sensor board, "sim" when replayed from the dataset.
+  source: Source;
+  // Dataset row being replayed, or null while live.
+  row: number | null;
 }
 
-export interface Ambient {
-  pressureHpa: number;
-  temperatureC: number;
-  airQualityRaw: number;
-  lightRaw: number;
+export interface Board {
   source: Source;
   lastSeenMs: number | null;
+  features: Features | null;
 }
 
 export interface Battery {
@@ -44,9 +46,12 @@ export interface Battery {
 
 export interface Prediction {
   turbineId: string;
-  issue: "overheat";
-  minutesToLimit: number | null;
+  // Failure probability from the decision tree on the current row.
+  probability: number;
+  mode: FailureMode | null;
+  minutesToFailure: number | null;
   risk: number;
+  detail: string;
 }
 
 export type Severity = "info" | "watch" | "trip";
@@ -76,27 +81,27 @@ export interface PlantState {
   reserveMw: number;
   turbines: Turbine[];
   battery: Battery;
-  ambient: Ambient;
+  board: Board;
   engineers: Engineer[];
   requests: MaintenanceRequest[];
   predictions: Prediction[];
   events: PlantEvent[];
   history: HistoryPoint[];
-  tempHistory: Record<string, number[]>;
-  simWear: Record<string, number>;
-  excessHistory: Record<string, number[]>;
-  expectedExhaustC: Record<string, number>;
+  riskHistory: Record<string, number[]>;
 }
 
+// What the sensor board posts: the dataset's six features, measured live for GT-08.
 export interface SensorReading {
   device: string;
   seq: number;
   uptime_ms: number;
   readings: {
-    air_quality_raw?: number;
-    pressure_hpa?: number;
-    temperature_c?: number;
-    light_raw?: number;
+    type?: MachineType;
+    air_temp_k?: number;
+    process_temp_k?: number;
+    rpm?: number;
+    torque_nm?: number;
+    tool_wear_min?: number;
   };
 }
 

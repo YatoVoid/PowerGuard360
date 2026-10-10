@@ -19,7 +19,7 @@ const VIEWS: { id: View; label: string; icon: () => React.ReactElement }[] = [
 function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  const board = useStore((s) => s.plant.ambient.source);
+  const board = useStore((s) => s.plant.board.source);
   return (
     <aside className="side" aria-label="Main">
       <div className="side-brand">
@@ -178,7 +178,7 @@ function TwinView() {
 function DashboardView() {
   const history = useStore((s) => s.plant.history);
   const events = useStore((s) => s.plant.events);
-  const source = useStore((s) => s.plant.ambient.source);
+  const source = useStore((s) => s.plant.board.source);
   return (
     <div className="dash">
       <div className="d-kpis kpi-row"><BalanceStats /></div>
@@ -187,7 +187,7 @@ function DashboardView() {
       <Panel title="Unit load" meta="Share of rated output" className="d-load"><UnitLoadBars /></Panel>
       <Panel title="Turbine fleet" className="d-fleet"><TurbineStrip /></Panel>
       <Panel title="Selected unit" className="d-detail"><AssetDetail /></Panel>
-      <Panel title="Overheat forecast" className="d-pred"><PredictionList /></Panel>
+      <Panel title="Failure forecast" className="d-pred"><PredictionList /></Panel>
       <Panel title="Maintenance" meta="Open requests" className="d-maint"><MaintSummary /></Panel>
       <Panel title={`${LIVE_SENSOR_UNIT} sensor board`} aside={<SourceTag source={source} />} className="d-sensors"><SensorPanel /></Panel>
     </div>

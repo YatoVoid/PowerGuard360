@@ -7,7 +7,18 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "resolveJsonModule": true
   },
-  "include": ["src", "../web/src/sim/engine.ts", "../web/src/sim/site.ts", "../web/src/types.ts"]
+  "include": [
+    "src",
+    "../web/src/sim/engine.ts",
+    "../web/src/sim/site.ts",
+    "../web/src/types.ts",
+    "../web/src/sim/model.ts",
+    "../web/src/data/ai4i.json",
+    "../web/src/data/model.json"
+  ]
 }

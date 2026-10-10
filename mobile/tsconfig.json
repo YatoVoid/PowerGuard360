@@ -12,7 +12,8 @@
       "@engine/*": [
         "../web/src/*"
       ]
-    }
+    },
+    "resolveJsonModule": true
   },
   "include": [
     "**/*.ts",
@@ -21,6 +22,7 @@
     "expo-env.d.ts",
     "../web/src/sim/engine.ts",
     "../web/src/types.ts",
-    "../web/src/sim/site.ts"
+    "../web/src/sim/site.ts",
+    "../web/src/sim/model.ts"
   ]
 }
