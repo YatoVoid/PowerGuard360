@@ -1,10 +1,13 @@
 import { useEffect, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { PHONE_GPS_SCALE, useStore } from "../store";
 import { GEOFENCE_KM, SHIPMENT_REPLAY_SPEED, SITE_LON_LAT, splitRoute } from "../sim/engine";
 import { AlarmList, Panel, SourceTag, clockOf, fmt } from "../ui/parts";
 import type { Shipment } from "../types";
+
+maplibregl.setWorkerUrl(workerUrl);
 
 const STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 type Feature = { type: "Feature"; properties: Record<string, unknown>; geometry: { type: "LineString"; coordinates: [number, number][] } };
