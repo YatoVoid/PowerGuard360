@@ -4,7 +4,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } 
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 
 import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from '@engine/sim/engine';
-import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
+import type { HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
 import { useStore } from '@/state/store';
 import { C, F, S, clockOf, fmt } from '@/ui/theme';
 
@@ -59,16 +59,23 @@ export function KV({ label, value, watch }: { label: string; value: string; watc
 
 export const tap = () => { Haptics.selectionAsync().catch(() => {}); };
 
-export function Btn({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) {
+export function Btn({ label, onPress, danger, primary }: { label: string; onPress: () => void; danger?: boolean; primary?: boolean }) {
   return (
     <Pressable
       onPress={() => { tap(); onPress(); }}
       android_ripple={{ color: danger ? C.tripBg : C.surface2 }}
       hitSlop={6}
       accessibilityRole="button"
-      style={({ pressed }) => [st.btn, danger && { borderColor: C.trip }, pressed && { backgroundColor: danger ? C.trip : C.surface2 }]}
+      style={({ pressed }) => [
+        st.btn,
+        danger && { borderColor: C.trip },
+        primary && { backgroundColor: C.flow, borderColor: C.flow, minHeight: 52 },
+        pressed && { backgroundColor: danger ? C.trip : primary ? '#255fc4' : C.surface2 },
+      ]}
     >
-      {({ pressed }) => <Text style={[st.btnText, danger && { color: pressed ? '#fff' : C.trip }]}>{label}</Text>}
+      {({ pressed }) => (
+        <Text style={[st.btnText, danger && { color: pressed ? '#fff' : C.trip }, primary && { color: '#fff', textAlign: 'center' }]}>{label}</Text>
+      )}
     </Pressable>
   );
 }
@@ -287,25 +294,6 @@ export function Sensors() {
           ? `Live readings feed ${LIVE_SENSOR_UNIT}. Covering the light sensor trips it.`
           : `No sensor board connected. ${LIVE_SENSOR_UNIT} shows simulated readings like the other units.`}
       </Text>
-    </View>
-  );
-}
-
-export function DeliveryInfo({ d }: { d: Delivery }) {
-  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
-  return (
-    <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.rule }}>
-      <Text style={[st.panelTitle, { marginBottom: 6 }]}>On site</Text>
-      <Text style={st.body}>
-        {d.status === 'unloading' && `${d.crew} (${d.workers} people) unloading at the dock. Parts reach the ${d.toLabel} in ${eta}.`}
-        {d.status === 'carrying' && `${d.crew} (${d.workers} people) carrying the parts to the ${d.toLabel}. Arrives in ${eta}.`}
-        {d.status === 'delivered' && `${d.crew} delivered the parts to the ${d.toLabel}.`}
-      </Text>
-      {d.status !== 'delivered' && (
-        <View style={[st.meter, { marginTop: 8, height: 4 }]}>
-          <View style={{ height: 4, width: `${(d.status === 'unloading' ? 0 : d.progress) * 100}%`, backgroundColor: C.flow }} />
-        </View>
-      )}
     </View>
   );
 }

@@ -10,8 +10,9 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 
-import { startClock } from '@/state/store';
+import { prepareNotifications, startClock } from '@/state/store';
 import { C } from '@/ui/theme';
+import { AlertBanner } from '@/ui/AlertBanner';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -21,6 +22,7 @@ export default function RootLayout() {
     BarlowSemiCondensed_500Medium, BarlowSemiCondensed_600SemiBold, BarlowSemiCondensed_700Bold,
   });
   useEffect(() => startClock(), []);
+  useEffect(() => { prepareNotifications(); }, []);
   useEffect(() => {
     if (loaded || error) SplashScreen.hideAsync();
   }, [loaded, error]);
@@ -38,11 +40,12 @@ export default function RootLayout() {
           <NativeTabs.Trigger.Label>Dashboard</NativeTabs.Trigger.Label>
           <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/home.png')} renderingMode="template" />
         </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="shipments">
-          <NativeTabs.Trigger.Label>Shipments</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger name="work">
+          <NativeTabs.Trigger.Label>Work orders</NativeTabs.Trigger.Label>
           <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/explore.png')} renderingMode="template" />
         </NativeTabs.Trigger>
       </NativeTabs>
+      <AlertBanner />
     </>
   );
 }
