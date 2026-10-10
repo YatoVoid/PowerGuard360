@@ -1,4 +1,4 @@
-# Firmware (Anthony)
+# Firmware (Anthony, cptnomar)
 
 Read the sensors on the ESP32 and POST them to the server once a second.
 
@@ -40,4 +40,4 @@ Wi-Fi password, `SERVER_URL` and `DEVICE_TOKEN` go in `secrets.h`, which git ign
 Print the JSON to Serial Monitor at 115200 baud, one line per reading. The laptop can forward that line over USB if the venue Wi-Fi blocks the board, so keep the serial output in the same JSON even after POST works.
 
 ## Branch
-Work on `anthony/firmware`. Only touch this folder.
+Anthony works on `anthony/firmware`, cptnomar on `cptnomar/firmware`. Only touch this folder.

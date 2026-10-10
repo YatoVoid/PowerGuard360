@@ -4,7 +4,7 @@ Live: https://power-guard-360.vercel.app
 Feature freeze Sun 9 AM. Submit Sun 1 PM. Judging Sun 1:30-3:30 PM.
 
 ## Done
-- Repo, team branches and folders (Anthony: firmware, Sakina: docs, egetwasm: story)
+- Repo, team branches and folders (Anthony and cptnomar: firmware, Sakina: docs)
 - Sponsor notes, verified Project Kilby facts, MLH prize list
 - Web app deployed on Vercel
 - 3D plant view: 8 gas turbines with HRSGs and stacks, steam hall, air-cooled condenser, switchyard, battery yard, AI data center, gas metering, live power flow, click any asset
