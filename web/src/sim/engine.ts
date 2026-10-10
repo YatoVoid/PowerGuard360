@@ -15,12 +15,9 @@ const HISTORY_LEN = 300;
 const TEMP_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
-const SHIPMENT_REPLAY_SPEED = 40;
+export const SHIPMENT_REPLAY_SPEED = 12;
+export const GEOFENCE_KM = 3;
 
-export const ROUTE_MIDLAND_TO_SITE: [number, number][] = [
-  [-102.078, 31.997], [-102.368, 31.845], [-102.62, 31.72], [-102.892, 31.594],
-  [-103.127, 31.538], [-103.31, 31.47], [-103.493, 31.423], [-103.56, 31.37],
-];
 export const SITE_LON_LAT: [number, number] = [-103.56, 31.37];
 
 export function mulberry32(seed: number) {
@@ -34,7 +31,7 @@ export function mulberry32(seed: number) {
   };
 }
 
-function haversineKm(a: [number, number], b: [number, number]) {
+export function haversineKm(a: [number, number], b: [number, number]) {
   const R = 6371;
   const dLat = ((b[1] - a[1]) * Math.PI) / 180;
   const dLon = ((b[0] - a[0]) * Math.PI) / 180;
@@ -93,22 +90,51 @@ function makeTurbine(i: number): Turbine {
   };
 }
 
-function makeShipment(): Shipment {
-  const [lon, lat] = ROUTE_MIDLAND_TO_SITE[0];
-  const km = routeLengthKm(ROUTE_MIDLAND_TO_SITE);
+type NamedPoint = { name?: string; at: [number, number] };
+
+const MIDLAND_ROUTE: NamedPoint[] = [
+  { name: "Midland", at: [-102.078, 31.997] }, { name: "Odessa", at: [-102.368, 31.845] }, { at: [-102.62, 31.72] },
+  { name: "Monahans", at: [-102.892, 31.594] }, { at: [-103.127, 31.538] }, { at: [-103.31, 31.47] },
+  { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
+];
+const FORT_STOCKTON_ROUTE: NamedPoint[] = [
+  { name: "Fort Stockton", at: [-102.879, 30.894] }, { at: [-103.02, 30.98] }, { at: [-103.2, 31.12] },
+  { at: [-103.36, 31.27] }, { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
+];
+
+function makeShipment(
+  id: string, cargo: string, forAsset: string, carrier: string, points: NamedPoint[], speedKmh: number, startProgress: number,
+): Shipment {
+  const route = points.map((p) => p.at);
+  const total = routeLengthKm(route);
+  const stops: Shipment["stops"] = [];
+  let km = 0;
+  points.forEach((p, i) => {
+    if (i > 0) km += haversineKm(points[i - 1].at, p.at);
+    if (p.name) stops.push({ name: p.name, at: km / total });
+  });
+  const [lon, lat] = pointAlong(route, startProgress);
+  const remainingKm = total * (1 - startProgress);
   return {
-    id: "TRL-204",
-    cargo: "Spare combustion liners for GT-03",
-    carrier: "Permian Freight",
-    route: ROUTE_MIDLAND_TO_SITE,
-    progress: 0,
-    speedKmh: 96,
+    id, cargo, forAsset, carrier, route, stops,
+    origin: points[0].name ?? "",
+    progress: startProgress,
+    speedKmh,
     source: "sim",
     lat, lon,
-    remainingKm: km,
-    etaMin: (km / 96) * 60,
+    remainingKm,
+    etaMin: (remainingKm / (speedKmh * SHIPMENT_REPLAY_SPEED)) * 60,
     arrived: false,
+    lastPingT: null,
   };
+}
+
+export function initialShipments(): Shipment[] {
+  return [
+    makeShipment("TRL-204", "Combustion liner set", "GT-03", "Permian Freight", MIDLAND_ROUTE, 96, 0),
+    makeShipment("TNK-118", "Turbine lube oil, 6,000 gal", "Lube oil system", "Basin Fluids", MIDLAND_ROUTE.slice(1), 88, 0.3),
+    makeShipment("TRL-311", "Replacement battery modules (12)", "battery", "Trans-Pecos Haul", FORT_STOCKTON_ROUTE, 80, 0.12),
+  ];
 }
 
 export function createPlant(seed = 7): PlantState {
@@ -128,7 +154,7 @@ export function createPlant(seed = 7): PlantState {
     turbines,
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
     ambient: { pressureHpa: 1009.2, temperatureC: 31, airQualityRaw: 140, lightRaw: 2800, source: "sim", lastSeenMs: null },
-    shipments: [makeShipment()],
+    shipments: initialShipments(),
     predictions: [],
     events: [{ id: 0, t: 0, severity: "info", asset: "GT-08", text: "GT-08 offline for planned maintenance" }],
     history: [],
@@ -264,16 +290,25 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const shipments = prev.shipments.map((sh) => {
     const s = { ...sh };
     const total = routeLengthKm(s.route);
+    const before = s.remainingKm;
+    const phone = inputs.gpsKm?.find((g) => g.shipmentId === s.id);
+    if (inputs.gpsRelease?.includes(s.id)) s.source = "sim";
     if (inputs.gps && inputs.gps.shipmentId === s.id) {
-      s.lat = inputs.gps.lat; s.lon = inputs.gps.lon; s.source = "live";
+      s.lat = inputs.gps.lat; s.lon = inputs.gps.lon; s.source = "live"; s.lastPingT = t;
       s.remainingKm = haversineKm([s.lon, s.lat], SITE_LON_LAT);
       s.progress = Math.max(0, Math.min(1, 1 - s.remainingKm / total));
+    } else if (phone && !s.arrived) {
+      s.source = "live"; s.lastPingT = t;
+      s.progress = Math.min(1, s.progress + phone.km / total);
+      [s.lon, s.lat] = pointAlong(s.route, s.progress);
+      s.remainingKm = total * (1 - s.progress);
     } else if (s.source === "sim" && !s.arrived) {
       s.progress = Math.min(1, s.progress + (s.speedKmh / 3600) * SHIPMENT_REPLAY_SPEED / total);
       [s.lon, s.lat] = pointAlong(s.route, s.progress);
       s.remainingKm = total * (1 - s.progress);
     }
-    s.etaMin = (s.remainingKm / s.speedKmh) * 60;
+    s.etaMin = (s.remainingKm / (s.speedKmh * SHIPMENT_REPLAY_SPEED)) * 60;
+    if (before > GEOFENCE_KM && s.remainingKm <= GEOFENCE_KM && !s.arrived) log("info", s.id, `${s.id} entered the site geofence`);
     if (!s.arrived && s.remainingKm < 0.3) {
       s.arrived = true;
       log("info", s.id, `${s.id} arrived on site: ${s.cargo.toLowerCase()}`);
@@ -310,4 +345,19 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     tempHistory,
     simWear,
   };
+}
+
+export function splitRoute(route: [number, number][], progress: number): [[number, number][], [number, number][]] {
+  const here = pointAlong(route, progress);
+  const total = routeLengthKm(route);
+  const driven: [number, number][] = [route[0]];
+  let km = 0;
+  let i = 1;
+  for (; i < route.length; i++) {
+    km += haversineKm(route[i - 1], route[i]);
+    if (km / total > progress) break;
+    driven.push(route[i]);
+  }
+  driven.push(here);
+  return [driven, [here, ...route.slice(i)]];
 }

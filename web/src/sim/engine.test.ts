@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPlant, derateFactor, predictOverheat, step, WATCH_TEMP_C } from "./engine";
+import { createPlant, derateFactor, predictOverheat, splitRoute, step, WATCH_TEMP_C } from "./engine";
 import type { PlantState, StepInputs } from "../types";
 
 function run(state: PlantState, seconds: number, inputs: StepInputs = {}) {
@@ -60,5 +60,26 @@ describe("plant engine", () => {
 
   it("prediction has no estimate for a flat trend", () => {
     expect(predictOverheat("GT-01", Array(60).fill(590)).minutesToLimit).toBeNull();
+  });
+});
+
+describe("shipments", () => {
+  it("phone GPS takes over a trailer and moves it along its route", () => {
+    const s0 = createPlant();
+    const before = s0.shipments[0].remainingKm;
+    const s1 = step(s0, { gpsKm: [{ shipmentId: "TRL-204", km: 5 }] });
+    expect(s1.shipments[0].source).toBe("live");
+    expect(before - s1.shipments[0].remainingKm).toBeCloseTo(5, 1);
+    const s2 = step(s1);
+    expect(s2.shipments[0].remainingKm).toBeCloseTo(s1.shipments[0].remainingKm, 5);
+    const s3 = step(s2, { gpsRelease: ["TRL-204"] });
+    expect(s3.shipments[0].source).toBe("sim");
+  });
+
+  it("splits a route at the current position", () => {
+    const sh = createPlant().shipments[0];
+    const [driven, rest] = splitRoute(sh.route, 0.5);
+    expect(driven[driven.length - 1]).toEqual(rest[0]);
+    expect(rest[rest.length - 1]).toEqual(sh.route[sh.route.length - 1]);
   });
 });

@@ -59,7 +59,7 @@ function assetPosition(id: string | null): V3 | null {
   if (id.startsWith("GT-")) return [UNIT_X(Number(id.slice(3)) - 1), 0, -42];
   if (id === "datacenter") return [0, 0, 62];
   if (id === "battery") return [-150, 0, 32];
-  if (id === "TRL-204") return [140, 0, 82];
+  if (id.startsWith("TRL-") || id.startsWith("TNK-")) return [140, 0, 82];
   return null;
 }
 
@@ -421,7 +421,8 @@ function BatteryYard() {
 }
 
 function Truck() {
-  const sh = useStore((s) => s.plant.shipments[0]);
+  // Only one truck is drawn on site: whichever is closest to the gate.
+  const sh = useStore((s) => s.plant.shipments.reduce((a, b) => (b.remainingKm < a.remainingKm ? b : a)));
   const group = useRef<THREE.Group>(null);
   const curve = useMemo(() => new THREE.CatmullRomCurve3(ROAD.map((p) => new THREE.Vector3(...p))), []);
   const onSite = !!sh && sh.remainingKm <= ROAD_KM;

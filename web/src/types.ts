@@ -43,8 +43,11 @@ export interface Prediction {
 export interface Shipment {
   id: string;
   cargo: string;
+  forAsset: string;
   carrier: string;
+  origin: string;
   route: [number, number][];
+  stops: { name: string; at: number }[];
   progress: number;
   speedKmh: number;
   source: Source;
@@ -53,6 +56,7 @@ export interface Shipment {
   remainingKm: number;
   etaMin: number;
   arrived: boolean;
+  lastPingT: number | null;
 }
 
 export type Severity = "info" | "watch" | "trip";
@@ -110,4 +114,6 @@ export interface StepInputs {
   tripRequests?: string[];
   resetRequests?: string[];
   gps?: { shipmentId: string; lat: number; lon: number } | null;
+  gpsKm?: { shipmentId: string; km: number }[];
+  gpsRelease?: string[];
 }

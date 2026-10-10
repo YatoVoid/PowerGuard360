@@ -194,9 +194,9 @@ export function ShipmentDetail({ id }: { id: string }) {
   );
 }
 
-export function AlarmList({ events, limit = 8 }: { events: PlantEvent[]; limit?: number }) {
+export function AlarmList({ events, limit = 8, empty = "No alarms." }: { events: PlantEvent[]; limit?: number; empty?: string }) {
   const select = useStore((s) => s.select);
-  if (!events.length) return <p className="empty">No alarms.</p>;
+  if (!events.length) return <p className="empty">{empty}</p>;
   return (
     <ol className="alarms">
       {events.slice(0, limit).map((e) => (

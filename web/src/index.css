@@ -200,12 +200,66 @@ h1, h2, h3 { margin: 0; }
 .d-alarms { grid-area: alm; }
 
 /* map */
-.map-view { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100%; }
-.map { min-height: 320px; height: 100%; }
-.map-side { padding: 10px; border-left: 1px solid var(--rule); overflow-y: auto; }
-.pin { font: 600 12px/1 var(--font); padding: 4px 7px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--ink); white-space: nowrap; }
+.map-view { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); height: 100%; }
+.map-wrap { position: relative; min-height: 0; height: 100%; }
+/* beats maplibre's own .maplibregl-map { position: relative }, which loads later */
+.map-wrap > .map { position: absolute; inset: 0; background: #e9e9e4; }
+.map-legend {
+  position: absolute; left: 12px; bottom: 28px; display: grid; gap: 4px; padding: 8px 10px;
+  background: rgb(228 230 225 / 0.94); border: 1px solid var(--rule); border-radius: var(--radius-s); font-size: 12px;
+}
+.map-legend span::before { content: ""; display: inline-block; width: 18px; margin-right: 8px; vertical-align: middle; border-top: 3px solid var(--flow); }
+.map-legend .lg-ahead::before { border-top: 2px dashed var(--ink); opacity: 0.7; }
+.map-legend .lg-fence::before { height: 9px; border: 1.5px dashed var(--flow); background: rgb(47 93 138 / 0.1); border-radius: 50%; width: 14px; margin-right: 12px; }
+.map-side { display: grid; gap: 10px; align-content: start; padding: 10px; border-left: 1px solid var(--rule); overflow-y: auto; }
+.replay { margin: 0 4px; }
+.pin { font: 600 12px/1 var(--font); padding: 5px 8px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--ink); white-space: nowrap; color: var(--ink); }
 .pin-site { background: var(--ink); color: var(--surface); }
-.pin-truck { background: var(--flow); color: #fff; border-color: var(--flow); }
+.pin-truck { cursor: pointer; box-shadow: 0 1px 0 rgb(0 0 0 / 0.15); }
+.pin-truck.is-selected { background: var(--flow); border-color: var(--flow); color: #fff; z-index: 2; }
+.pin-truck.is-live::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+.pin-truck.is-arrived { opacity: 0.6; }
+
+.ship-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ship {
+  width: 100%; display: grid; gap: 3px; padding: 9px 10px; text-align: left; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--radius-s);
+}
+.ship:hover { border-color: var(--ink-2); }
+.ship.is-selected { background: var(--surface); border-color: var(--flow); box-shadow: inset 0 0 0 1px var(--flow); }
+.ship-top { display: flex; justify-content: space-between; gap: 8px; }
+.ship-eta { font: 600 16px/1.2 var(--font-num); font-variant-numeric: tabular-nums; }
+.ship-cargo { font-size: 13px; color: var(--ink-2); }
+.ship-bar { height: 3px; background: var(--rule); overflow: hidden; margin-top: 3px; }
+.ship-bar span { display: block; height: 100%; background: var(--flow); transform-origin: left; transition: transform 0.9s linear; }
+.ship .src { justify-self: start; margin-top: 2px; }
+
+.ship-what { margin: 0 0 10px; }
+.link { border: 0; background: none; padding: 0; color: var(--flow); font-weight: 600; text-decoration: underline; cursor: pointer; }
+.status-plain { text-transform: none; }
+.status-moving { background: var(--surface-2); }
+.status-arrived { background: var(--ink); color: var(--surface); }
+.eta { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.eta-big { font: 700 34px/1 var(--font-num); font-variant-numeric: tabular-nums; }
+.eta-at { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.stops { position: relative; height: 44px; margin: 0 14px 12px; }
+.stops-track { position: absolute; left: 0; right: 0; top: 6px; height: 3px; background: var(--rule); }
+.stops-track span { display: block; height: 100%; background: var(--flow); transform-origin: left; transition: transform 0.9s linear; }
+.stop { position: absolute; top: 0; transform: translateX(-50%); display: grid; justify-items: center; gap: 6px; }
+.stop i { width: 15px; height: 15px; border-radius: 50%; background: var(--surface); border: 2px solid var(--rule); }
+.stop.is-passed i { border-color: var(--flow); background: var(--flow); }
+.stop em { font-style: normal; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.stop.is-first { transform: translateX(-7px); justify-items: start; }
+.stop.is-last { transform: translateX(calc(-100% + 7px)); justify-items: end; }
+.stop.is-last em { font-weight: 700; color: var(--ink); }
+
+.verdict { margin: 0 0 12px; padding: 9px 11px; background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--radius-s); }
+.verdict-watch { background: #f3e6bf; border-color: var(--watch); color: var(--watch-ink); font-weight: 500; }
+.verdict-trip { background: #f2d2cf; border-color: var(--trip); }
+.tracker { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.tracker-status { margin: 0 0 8px; }
+.sub { margin: 16px 0 6px; font: 600 14px/1.2 var(--font); color: var(--ink-2); }
 
 @media (max-width: 1100px) {
   .dash { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "bal bal" "fleet fleet" "det pred" "sen alm"; }
@@ -230,8 +284,9 @@ h1, h2, h3 { margin: 0; }
   .dash { grid-template-columns: 1fr; grid-template-areas: "bal" "fleet" "det" "pred" "sen" "alm"; height: auto; padding: 10px 16px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .map-view { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+  .map-view { grid-template-columns: 1fr; grid-template-rows: 46vh auto; height: auto; }
   .map-side { border-left: 0; padding: 10px 16px; }
+  .map-legend { top: 8px; bottom: auto; left: 8px; right: 52px; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 5px 8px; font-size: 11px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
