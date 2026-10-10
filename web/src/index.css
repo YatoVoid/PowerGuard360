@@ -219,6 +219,7 @@ h1, h2, h3 { margin: 0; }
 .map-legend span::before { content: ""; display: inline-block; width: 18px; margin-right: 8px; vertical-align: middle; border-top: 3px solid var(--flow); }
 .map-legend .lg-ahead::before { border-top: 2px dashed var(--ink); opacity: 0.7; }
 .map-legend .lg-fence::before { height: 9px; border: 1.5px dashed var(--flow); background: rgb(47 93 138 / 0.1); border-radius: 50%; width: 14px; margin-right: 12px; }
+.map-reset { position: absolute; top: 12px; left: 12px; background: var(--surface); }
 .map-side { display: grid; gap: 12px; align-content: start; padding: var(--gap); border-left: 1px solid var(--rule); overflow-y: auto; }
 .replay { margin: 0 4px; }
 .pin { font: 600 12px/1 var(--font); padding: 5px 8px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--ink); white-space: nowrap; color: var(--ink); }
@@ -305,6 +306,7 @@ h1, h2, h3 { margin: 0; }
   .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .map-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: 46vh auto; height: auto; }
   .map-side { border-left: 0; padding: var(--gap) var(--gutter); }
+  .map-reset { top: auto; bottom: 30px; left: 8px; padding: 6px 10px; font-size: 13px; }
   .map-legend { top: 8px; bottom: auto; left: 8px; right: 52px; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 5px 8px; font-size: 11px; }
 }
 

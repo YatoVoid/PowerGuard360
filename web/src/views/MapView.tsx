@@ -23,6 +23,12 @@ function circle(center: [number, number], km: number, steps = 64): [number, numb
   return pts;
 }
 
+function fitAll(m: maplibregl.Map, duration = 1000) {
+  const bounds = new maplibregl.LngLatBounds();
+  useStore.getState().plant.shipments.forEach((sh) => sh.route.forEach((p) => bounds.extend(p)));
+  m.fitBounds(bounds, { padding: { top: 60, bottom: 50, left: 40, right: 60 }, duration });
+}
+
 function routeFeatures(shipments: Shipment[], selectedId: string): { driven: Feature[]; ahead: Feature[] } {
   const driven: Feature[] = [], ahead: Feature[] = [];
   for (const sh of shipments) {
@@ -78,13 +84,13 @@ function ShipmentMap() {
         paint: { "line-color": "#2f5d8a", "line-width": ["case", ["get", "selected"], 5, 3], "line-opacity": ["case", ["get", "selected"], 1, 0.5] },
       });
       ready.current = true;
-      const bounds = new maplibregl.LngLatBounds();
-      useStore.getState().plant.shipments.forEach((sh) => sh.route.forEach((p) => bounds.extend(p)));
-      m.fitBounds(bounds, { padding: { top: 50, bottom: 50, left: 40, right: 60 }, duration: 0 });
+      fitAll(m, 0);
     });
-    const site = document.createElement("div");
+    const site = document.createElement("button");
+    site.type = "button";
     site.className = "pin pin-site";
     site.textContent = "Plant";
+    site.addEventListener("click", (e) => { e.stopPropagation(); m.flyTo({ center: SITE_LON_LAT, zoom: 12, duration: 1200 }); });
     new maplibregl.Marker({ element: site }).setLngLat(SITE_LON_LAT).addTo(m);
     const markerMap = markers.current;
     return () => { m.remove(); map.current = null; ready.current = false; markerMap.clear(); };
@@ -118,9 +124,19 @@ function ShipmentMap() {
     }
   }, [shipments, current, select]);
 
+  // Picking a truck from a label or the list flies the map to it; live position updates don't move the camera.
+  const selectedId = useStore((s) => s.selected);
+  useEffect(() => {
+    const m = map.current;
+    const sh = useStore.getState().plant.shipments.find((x) => x.id === selectedId);
+    if (!m || !sh) return;
+    m.flyTo({ center: [sh.lon, sh.lat], zoom: Math.max(m.getZoom(), 9.5), duration: 1200, essential: true });
+  }, [selectedId]);
+
   return (
     <div className="map-wrap">
       <div ref={box} className="map" role="region" aria-label="Map of inbound shipments" />
+      <button type="button" className="btn map-reset" onClick={() => map.current && fitAll(map.current)}>Show all routes</button>
       <div className="map-legend" aria-hidden>
         <span className="lg-driven">Driven</span>
         <span className="lg-ahead">Still to drive</span>

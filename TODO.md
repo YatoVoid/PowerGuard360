@@ -21,5 +21,4 @@ Feature freeze Sun 9 AM. Submit Sun 1 PM. Judging Sun 1:30-3:30 PM.
 5. ElevenLabs voice alerts on trips
 6. Swap the trend forecast for the ML model when real turbine data arrives
 7. Domain from GoDaddy Registry (MLH code)
-8. Devpost: write-up, screenshots, demo video, AI tool disclosure, every prize selected
-9. Rehearse the 2-minute pitch and demo script
+8. Rehearse the 2-minute pitch and demo script
