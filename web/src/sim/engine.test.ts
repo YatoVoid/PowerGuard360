@@ -22,14 +22,16 @@ describe("plant engine", () => {
     expect(tripped.events.some((e) => e.severity === "trip" && e.asset === "GT-02")).toBe(true);
   });
 
-  it("trips GT-01 when the live light sensor goes dark", () => {
+  it("trips GT-08 when its live flame sensor goes dark", () => {
     const s = step(createPlant(), {
       sensor: { device: "d", seq: 1, uptime_ms: 1, readings: { light_raw: 50 } },
       sensorAtMs: 1000,
       nowMs: 1500,
     });
     expect(s.ambient.source).toBe("live");
-    expect(s.turbines[0].status).toBe("tripped");
+    expect(s.turbines[7].sensors.source).toBe("live");
+    expect(s.turbines[7].status).toBe("tripped");
+    expect(s.turbines[0].status).not.toBe("tripped");
   });
 
   it("ignores a dark light sensor when the reading is stale", () => {
@@ -39,7 +41,8 @@ describe("plant engine", () => {
       nowMs: 20000,
     });
     expect(s.ambient.source).toBe("sim");
-    expect(s.turbines[0].status).not.toBe("tripped");
+    expect(s.turbines[7].sensors.source).toBe("sim");
+    expect(s.turbines[7].status).not.toBe("tripped");
   });
 
   it("GT-03 drifts into watch and is flagged before it trips", () => {
@@ -100,5 +103,31 @@ describe("shipments", () => {
     const [driven, rest] = splitRoute(sh.route, 0.5);
     expect(driven[driven.length - 1]).toEqual(rest[0]);
     expect(rest[rest.length - 1]).toEqual(sh.route[sh.route.length - 1]);
+  });
+});
+
+describe("deliveries", () => {
+  it("a crew unloads an arrived truck and carries the parts to the asset", () => {
+    let s = createPlant();
+    s = step(s, { gpsKm: [{ shipmentId: "TRL-204", km: 1000 }] });
+    expect(s.shipments[0].arrived).toBe(true);
+    let d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
+    expect(d.status).toBe("unloading");
+    expect(d.toAsset).toBe("GT-03");
+    const firstEta = d.etaMin;
+    for (let i = 0; i < 25; i++) s = step(s);
+    d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
+    expect(d.status).toBe("carrying");
+    expect(d.etaMin).toBeLessThan(firstEta);
+    for (let i = 0; i < 400 && d.status !== "delivered"; i++) { s = step(s); d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!; }
+    expect(d.status).toBe("delivered");
+    expect(d.pos).toEqual(d.path[d.path.length - 1]);
+    expect(s.events.some((e) => e.text.includes("delivered combustion liner set"))).toBe(true);
+  });
+
+  it("each arrived shipment gets its own crew", () => {
+    let s = createPlant();
+    for (const id of ["TRL-204", "TNK-118", "TRL-311"]) s = step(s, { gpsKm: [{ shipmentId: id, km: 1000 }] });
+    expect(new Set(s.deliveries.map((d) => d.crew)).size).toBe(3);
   });
 });

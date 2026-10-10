@@ -5,6 +5,8 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore } from "../store";
+import { DOCK_BAYS, UNIT_X } from "../sim/site";
+import { LIVE_SENSOR_UNIT } from "../sim/engine";
 import type { Turbine } from "../types";
 
 // Layout follows a combined-cycle plant: gas turbine -> heat recovery steam generator (HRSG) with the
@@ -13,7 +15,6 @@ import type { Turbine } from "../types";
 
 type V3 = [number, number, number];
 
-const UNIT_X = (i: number) => -84 + i * 24;
 const STATUS_COLOR: Record<Turbine["status"], string> = {
   running: "#8f9690",
   watch: "#e0a100",
@@ -88,7 +89,15 @@ function assetPosition(id: string | null): V3 | null {
   if (id === "switchyard") return [SWITCHYARD.x, 0, SWITCHYARD.z];
   if (id === "gas") return [118, 0, -34];
   if (id === "battery") return [-150, 0, 32];
-  if (id.startsWith("TRL-") || id.startsWith("TNK-")) return [140, 0, 82];
+  if (id.startsWith("TRL-") || id.startsWith("TNK-")) {
+    const plant = useStore.getState().plant;
+    const d = plant.deliveries.find((x) => x.shipmentId === id);
+    // Follow the crew once the parts are moving; otherwise look at the truck's bay.
+    if (d && d.status !== "delivered") return [d.pos[0], 0, d.pos[1]];
+    const i = Math.max(0, plant.shipments.findIndex((x) => x.id === id));
+    const bay = DOCK_BAYS[i % DOCK_BAYS.length];
+    return [bay[0], 0, bay[1]];
+  }
   return null;
 }
 
@@ -282,6 +291,7 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
           <Label id={tb.id} className={`tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
+            {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.sensors.source === "live" ? "is-on" : ""}`}>{tb.sensors.source === "live" ? "live sensors" : "sensors offline"}</em>}
           </Label>
         </Html>
       </group>
@@ -661,48 +671,157 @@ function BatteryYard() {
   );
 }
 
-function Truck() {
-  // Only one truck is drawn on site: whichever is closest to the gate.
-  const sh = useStore((s) => s.plant.shipments.reduce((a, b) => (b.remainingKm < a.remainingKm ? b : a)));
+function TruckModel({ tanker }: { tanker: boolean }) {
+  return (
+    <>
+      {tanker ? (
+        <mesh position={[0, 2.4, -2]} rotation-x={Math.PI / 2} castShadow>
+          <cylinderGeometry args={[1.5, 1.5, 9, 14]} />
+          <meshStandardMaterial color="#d9dcd6" metalness={0.4} roughness={0.4} />
+        </mesh>
+      ) : (
+        <Box p={[0, 2.2, -2]} s={[2.6, 3, 9]} c="#e8e6e0" cast />
+      )}
+      <Box p={[0, 1.8, 4]} s={[2.6, 2.6, 3]} c={FLOW} cast />
+    </>
+  );
+}
+
+// One truck per shipment: on the approach road in its last few kilometres, then parked in its own bay.
+function TruckOnSite({ id, index }: { id: string; index: number }) {
+  const sh = useStore((s) => s.plant.shipments.find((x) => x.id === id));
   const group = useRef<THREE.Group>(null);
-  const curve = useMemo(() => new THREE.CatmullRomCurve3(ROAD.map((p) => new THREE.Vector3(...p))), []);
+  const curve = useMemo(() => {
+    const bay = DOCK_BAYS[index % DOCK_BAYS.length];
+    return new THREE.CatmullRomCurve3([...ROAD, [bay[0], 0.3, bay[1] + 10] as V3, [bay[0], 0.3, bay[1]] as V3].map((p) => new THREE.Vector3(...p)));
+  }, [index]);
   const onSite = !!sh && sh.remainingKm <= ROAD_KM;
   useFrame(() => {
-    if (!group.current || !sh) return;
-    const u = Math.min(1, Math.max(0, 1 - sh.remainingKm / ROAD_KM));
+    const s = useStore.getState().plant.shipments.find((x) => x.id === id);
+    if (!group.current || !s) return;
+    const u = s.arrived ? 1 : Math.min(1, Math.max(0, 1 - s.remainingKm / ROAD_KM));
     const p = curve.getPointAt(u);
-    const ahead = curve.getPointAt(Math.min(1, u + 0.01));
-    group.current.position.lerp(p, 0.15);
-    if (u < 0.99) group.current.lookAt(ahead.x, p.y, ahead.z);
+    group.current.position.lerp(p, 0.2);
+    if (u < 0.995) {
+      const ahead = curve.getPointAt(Math.min(1, u + 0.01));
+      group.current.lookAt(ahead.x, p.y, ahead.z);
+    }
   });
   if (!sh) return null;
   return (
+    <group ref={group} visible={onSite} position={ROAD[0]}>
+      <Selectable id={sh.id}>
+        <TruckModel tanker={sh.id.startsWith("TNK-")} />
+      </Selectable>
+    </group>
+  );
+}
+
+function Dock() {
+  const shipments = useStore((s) => s.plant.shipments);
+  const onSite = shipments.filter((x) => x.arrived).length;
+  const next = shipments.filter((x) => !x.arrived).sort((a, b) => a.remainingKm - b.remainingKm)[0];
+  return (
     <>
       <Line points={ROAD} color={ASPHALT} lineWidth={7} />
-      <Selectable id={sh.id}>
-        <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" cast />
-      </Selectable>
-      {/* The delivery dock carries the arrival readout so it stays put while the truck moves. */}
+      <mesh rotation-x={-Math.PI / 2} position={[150, 0.12, 88]} receiveShadow>
+        <planeGeometry args={[52, 22]} />
+        <meshStandardMaterial color="#9d988e" roughness={1} />
+      </mesh>
+      <Merged boxes={DOCK_BOXES} cast />
       <Html position={[150, 15, 68]} center distanceFactor={110} zIndexRange={[10, 0]}>
-        <Label id={sh.id}>
+        <Label id={next?.id ?? shipments[0].id}>
           <strong>Delivery dock</strong>
           <span>
-            {sh.arrived
-              ? `${sh.id} on site`
-              : onSite
-                ? `${sh.id} arriving, ${(sh.remainingKm * 1000).toFixed(0)} m out`
-                : `Next: ${sh.id}, ${sh.remainingKm.toFixed(0)} km out`}
+            {next
+              ? next.remainingKm <= ROAD_KM
+                ? `${next.id} arriving, ${(next.remainingKm * 1000).toFixed(0)} m out`
+                : `${onSite} on site. Next: ${next.id}, ${next.remainingKm.toFixed(0)} km`
+              : `${onSite} trucks on site`}
           </span>
         </Label>
       </Html>
-      <group ref={group} visible={onSite} position={ROAD[0]}>
-        <Selectable id={sh.id}>
-          <Box p={[0, 2.2, -2]} s={[2.6, 3, 9]} c="#e8e6e0" />
-          <Box p={[0, 1.8, 4]} s={[2.6, 2.6, 3]} c={FLOW} />
+      {shipments.map((sh, i) => <TruckOnSite key={sh.id} id={sh.id} index={i} />)}
+    </>
+  );
+}
+
+const DOCK_BOXES: BoxSpec[] = [
+  { p: [150, 5, 68], s: [24, 10, 14], c: "#cfcac0" },
+  // bay markers
+  ...DOCK_BAYS.map(([x, z]): BoxSpec => ({ p: [x, 0.2, z - 6], s: [4, 0.1, 0.5], c: "#e0a100" })),
+];
+
+const VEST = "#ff7a1a";
+
+function Worker({ offset, phase }: { offset: [number, number]; phase: number }) {
+  const g = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (g.current) g.current.position.y = Math.abs(Math.sin(clock.elapsedTime * 6 + phase)) * 0.25;
+  });
+  return (
+    <group ref={g} position={[offset[0], 0, offset[1]]}>
+      <mesh position={[0, 1.1, 0]} castShadow>
+        <capsuleGeometry args={[0.45, 1.2, 4, 8]} />
+        <meshStandardMaterial color={VEST} />
+      </mesh>
+      <mesh position={[0, 2.35, 0]}>
+        <sphereGeometry args={[0.38, 10, 8]} />
+        <meshStandardMaterial color="#f2f2ee" />
+      </mesh>
+    </group>
+  );
+}
+
+// A delivery crew walking the service road with the parts; the label carries the live ETA.
+function Crew({ shipmentId }: { shipmentId: string }) {
+  const d = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === shipmentId));
+  const t = useStore((s) => s.plant.t);
+  const group = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const cur = useStore.getState().plant.deliveries.find((x) => x.shipmentId === shipmentId);
+    if (!group.current || !cur) return;
+    group.current.position.lerp(new THREE.Vector3(cur.pos[0], 0.2, cur.pos[1]), 0.12);
+  });
+  // The path array keeps its identity between ticks, so the line is built once per delivery.
+  const path = d?.path;
+  const done = d?.status === "delivered";
+  const remaining = useMemo<V3[] | null>(() => (path && !done ? path.map(([x, z]) => [x, 0.6, z] as V3) : null), [path, done]);
+  // Crews stay visible for a minute after delivery so the drop-off is easy to spot.
+  if (!d || (d.deliveredT !== null && t - d.deliveredT > 60)) return null;
+  const offsets: [number, number][] = [[0, 0], [1.6, 0.9], [-1.4, 1.1], [0.4, -1.5]].slice(0, d.workers) as [number, number][];
+  const walking = d.status === "carrying";
+  return (
+    <>
+      {remaining && <Line points={remaining} color={VEST} lineWidth={1.5} dashed dashSize={2} gapSize={2} />}
+      <group ref={group} position={[d.pos[0], 0.2, d.pos[1]]}>
+        <Selectable id={d.shipmentId}>
+          {offsets.map((o, i) => (walking ? <Worker key={i} offset={o} phase={i * 1.3} /> : (
+            <group key={i} position={[o[0], 0, o[1]]}>
+              <mesh position={[0, 1.1, 0]}><capsuleGeometry args={[0.45, 1.2, 4, 8]} /><meshStandardMaterial color={VEST} /></mesh>
+              <mesh position={[0, 2.35, 0]}><sphereGeometry args={[0.38, 10, 8]} /><meshStandardMaterial color="#f2f2ee" /></mesh>
+            </group>
+          )))}
+          {d.status !== "delivered" && <Box p={[0.2, 1.6, 0.4]} s={[1.6, 1, 1.2]} c="#8a6a3c" />}
         </Selectable>
+        <Html position={[0, 6, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
+          <Label id={d.shipmentId} className="tag-crew">
+            <strong>{d.crew}</strong>
+            <span>
+              {d.status === "unloading" && `unloading ${d.shipmentId}, ${Math.ceil(d.unloadLeftS)} s`}
+              {d.status === "carrying" && `to ${d.toLabel}, ${d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${d.etaMin.toFixed(1)} min`}`}
+              {d.status === "delivered" && `delivered to ${d.toLabel}`}
+            </span>
+          </Label>
+        </Html>
       </group>
     </>
   );
+}
+
+function Crews() {
+  const ids = useStore((s) => s.plant.deliveries.map((d) => d.shipmentId).join(","));
+  return <>{ids ? ids.split(",").map((id) => <Crew key={id} shipmentId={id} />) : null}</>;
 }
 
 function Scene() {
@@ -727,7 +846,8 @@ function Scene() {
       <PowerFlow />
       <DataCenter />
       <BatteryYard />
-      <Truck />
+      <Dock />
+      <Crews />
     </>
   );
 }

@@ -4,8 +4,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { PHONE_GPS_SCALE, useStore } from "../store";
 import { GEOFENCE_KM, SHIPMENT_REPLAY_SPEED, SITE_LON_LAT, splitRoute } from "../sim/engine";
-import { AlarmList, Panel, SourceTag, clockOf, fmt } from "../ui/parts";
-import type { Shipment } from "../types";
+import { AlarmList, DeliveryInfo, Panel, SourceTag, clockOf, fmt } from "../ui/parts";
+import type { Delivery, Shipment } from "../types";
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -146,8 +146,17 @@ function ShipmentMap() {
   );
 }
 
+function shipStatusShort(sh: Shipment, deliveries: Delivery[]) {
+  if (!sh.arrived) return `${fmt(Math.max(1, sh.etaMin))} min`;
+  const d = deliveries.find((x) => x.shipmentId === sh.id);
+  if (!d) return "Arrived";
+  if (d.status === "delivered") return "Delivered";
+  return `At ${d.toAsset === "battery" ? "battery" : d.toAsset.startsWith("GT-") ? d.toAsset : "skid"} in ${d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`}`;
+}
+
 function ShipmentList() {
   const shipments = useStore((s) => s.plant.shipments);
+  const deliveries = useStore((s) => s.plant.deliveries);
   const select = useStore((s) => s.select);
   const current = useSelectedShipment();
   return (
@@ -157,7 +166,7 @@ function ShipmentList() {
           <button type="button" className={`ship ${sh.id === current?.id ? "is-selected" : ""}`} aria-pressed={sh.id === current?.id} onClick={() => select(sh.id)}>
             <span className="ship-top">
               <strong>{sh.id}</strong>
-              <span className="ship-eta">{sh.arrived ? "Arrived" : `${fmt(Math.max(1, sh.etaMin))} min`}</span>
+              <span className="ship-eta">{shipStatusShort(sh, deliveries)}</span>
             </span>
             <span className="ship-cargo">{sh.cargo}</span>
             <span className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${sh.progress})` }} /></span>
@@ -247,6 +256,7 @@ function ShipmentDetail() {
   const events = useStore((s) => s.plant.events);
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
+  const delivery = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === sh?.id));
   if (!sh) return <p className="empty">No shipments on the road.</p>;
   const isTurbine = sh.forAsset.startsWith("GT-");
   return (
@@ -275,6 +285,10 @@ function ShipmentDetail() {
         <div><dt>From</dt><dd>{sh.origin}</dd></div>
         <div><dt>Position</dt><dd>{fmt(sh.lat, 4)}, {fmt(sh.lon, 4)}</dd></div>
       </dl>
+      {delivery && <DeliveryInfo d={delivery} />}
+      {delivery && delivery.status !== "delivered" && (
+        <button type="button" className="btn" onClick={() => { select(sh.id); setView("twin"); }}>Watch the crew in 3D</button>
+      )}
       <PhoneTracker sh={sh} />
       <h4 className="sub">Trip log</h4>
       <AlarmList events={events.filter((e) => e.asset === sh.id)} limit={5} empty="Nothing logged yet. Entering the geofence and arriving show up here." />

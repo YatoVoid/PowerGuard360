@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
-import { TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
-import type { HistoryPoint, PlantEvent, Source, Turbine } from "../types";
+import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
+import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from "../types";
 
 export const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -134,6 +134,17 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
         <div><dt>Efficiency</dt><dd>{fmt(tb.efficiencyPct, 1)} %</dd></div>
         <div><dt>Run hours</dt><dd>{fmt(tb.runHours)}</dd></div>
       </dl>
+      <div className="sensor-head">
+        <h4 className="sub">Unit sensors</h4>
+        <SourceTag source={tb.sensors.source} />
+      </div>
+      <dl className="kv">
+        <div><dt>Inlet pressure</dt><dd>{fmt(tb.sensors.inletPressureHpa, 1)} hPa</dd></div>
+        <div><dt>Inlet air temp</dt><dd>{fmt(tb.sensors.inletTempC, 1)} °C</dd></div>
+        <div><dt>Air quality (raw)</dt><dd>{fmt(tb.sensors.airQualityRaw)}</dd></div>
+        <div><dt>Flame detector</dt><dd>{fmt(tb.sensors.flameRaw)}</dd></div>
+      </dl>
+      {tb.id === LIVE_SENSOR_UNIT && tb.sensors.source === "sim" && <p className="note">Connect the sensor board to drive these readings live.</p>}
       <div className="trend-row">
         <span>Exhaust temp, last 3 min</span>
         <Spark values={temps} lo={540} hi={TRIP_TEMP_C + 5} warn={WATCH_TEMP_C} />
@@ -246,8 +257,26 @@ export function AssetDetail() {
   return null;
 }
 
+export function DeliveryInfo({ d }: { d: Delivery }) {
+  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
+  return (
+    <div className="delivery">
+      <h4 className="sub">On site</h4>
+      <p className="delivery-line">
+        {d.status === "unloading" && <>{d.crew} ({d.workers} people) unloading at the dock. Parts reach the {d.toLabel} in {eta}.</>}
+        {d.status === "carrying" && <>{d.crew} ({d.workers} people) carrying the parts to the {d.toLabel}. Arrives in {eta}.</>}
+        {d.status === "delivered" && <>{d.crew} delivered the parts to the {d.toLabel}.</>}
+      </p>
+      {d.status !== "delivered" && (
+        <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${d.status === "unloading" ? 0 : d.progress})` }} /></div>
+      )}
+    </div>
+  );
+}
+
 export function ShipmentDetail({ id }: { id: string }) {
   const sh = useStore((s) => s.plant.shipments.find((x) => x.id === id));
+  const delivery = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === id));
   if (!sh) return null;
   return (
     <div className="detail">
@@ -262,6 +291,7 @@ export function ShipmentDetail({ id }: { id: string }) {
         <div><dt>ETA</dt><dd>{sh.arrived ? "Arrived" : `${fmt(sh.etaMin)} min`}</dd></div>
         <div><dt>Position</dt><dd>{fmt(sh.lat, 4)}, {fmt(sh.lon, 4)}</dd></div>
       </dl>
+      {delivery && <DeliveryInfo d={delivery} />}
     </div>
   );
 }
@@ -340,12 +370,12 @@ export function SensorPanel() {
         <div><dt>Barometric pressure</dt><dd>{fmt(a.pressureHpa, 1)} hPa</dd></div>
         <div><dt>Ambient temp</dt><dd>{fmt(a.temperatureC, 1)} °C</dd></div>
         <div><dt>Air quality (raw)</dt><dd>{fmt(a.airQualityRaw)}</dd></div>
-        <div><dt>GT-01 flame detector (light)</dt><dd>{fmt(a.lightRaw)}</dd></div>
+        <div><dt>Flame detector (light)</dt><dd>{fmt(a.lightRaw)}</dd></div>
       </dl>
       <p className="note">
         {a.source === "live"
-          ? "Readings from the site sensor board. Pressure and temperature set turbine capacity."
-          : "No sensor board connected. Showing simulated readings."}
+          ? `Live readings from the sensor board feed ${LIVE_SENSOR_UNIT}. Its pressure and temperature set ${LIVE_SENSOR_UNIT}'s capacity, and covering the light sensor trips it.`
+          : `No sensor board connected. ${LIVE_SENSOR_UNIT} is showing simulated readings like the other units.`}
       </p>
     </>
   );

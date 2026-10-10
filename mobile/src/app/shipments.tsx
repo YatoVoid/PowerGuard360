@@ -1,13 +1,21 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GEOFENCE_KM, SHIPMENT_REPLAY_SPEED } from '@engine/sim/engine';
-import type { Shipment } from '@engine/types';
+import type { Delivery, Shipment } from '@engine/types';
 import { PHONE_GPS_SCALE, useStore } from '@/state/store';
-import { Alarms, Btn, KV, Panel, SourceTag, TopBar, st } from '@/ui/parts';
+import { Alarms, Btn, DeliveryInfo, KV, Panel, SourceTag, TopBar, st, tap } from '@/ui/parts';
 import { ShipmentMap } from '@/ui/ShipmentMap';
 import { C, F, S, clockOf, fmt } from '@/ui/theme';
+
+function cardStatus(sh: Shipment, d: Delivery | undefined) {
+  if (!sh.arrived) return `${fmt(Math.max(1, sh.etaMin))} min`;
+  if (!d) return 'Arrived';
+  if (d.status === 'delivered') return 'Delivered';
+  const where = d.toAsset.startsWith('GT-') ? d.toAsset : d.toAsset === 'battery' ? 'battery' : 'skid';
+  return `At ${where} in ${d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`}`;
+}
 
 function statusOf(sh: Shipment) {
   if (sh.arrived) return 'Arrived';
@@ -88,19 +96,28 @@ export default function Shipments() {
   const select = useStore((s) => s.select);
   const t = useStore((s) => s.plant.t);
   const events = useStore((s) => s.plant.events);
+  const deliveries = useStore((s) => s.plant.deliveries);
   const [showAll, setShowAll] = useState(0);
+  const { height } = useWindowDimensions();
   const sh = shipments.find((x) => x.id === selected) ?? shipments.find((x) => !x.arrived) ?? shipments[0];
+  const delivery = deliveries.find((d) => d.shipmentId === sh.id);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: C.surface }}>
       <TopBar title="Shipments" />
-      <ScrollView style={{ backgroundColor: C.panel }} contentContainerStyle={{ padding: S.gutter, gap: S.gap, paddingBottom: 32 }}>
-        <View>
-          <ShipmentMap shipments={shipments} selectedId={sh.id} onSelect={select} showAllKey={showAll} />
-          <Pressable onPress={() => setShowAll((n) => n + 1)} style={styles.showAll} accessibilityRole="button">
-            <Text style={st.btnText}>Show all routes</Text>
-          </Pressable>
-        </View>
+      {/* The map stays pinned so dragging it never fights with scrolling the page. */}
+      <View style={{ height: Math.round(height * 0.36), padding: S.gutter, paddingBottom: S.gap, backgroundColor: C.panel }}>
+        <ShipmentMap shipments={shipments} selectedId={sh.id} onSelect={(id) => { tap(); select(id); }} showAllKey={showAll} />
+        <Pressable
+          onPress={() => { tap(); setShowAll((n) => n + 1); }}
+          android_ripple={{ color: C.surface2 }}
+          style={styles.showAll}
+          accessibilityRole="button"
+        >
+          <Text style={st.btnText}>Show all</Text>
+        </Pressable>
+      </View>
+      <ScrollView style={{ backgroundColor: C.panel }} contentContainerStyle={{ paddingHorizontal: S.gutter, gap: S.gap, paddingBottom: 32 }}>
 
         <Panel title="Inbound to the plant">
           <View style={{ gap: 6 }}>
@@ -109,14 +126,15 @@ export default function Shipments() {
               return (
                 <Pressable
                   key={x.id}
-                  onPress={() => select(x.id)}
+                  onPress={() => { tap(); select(x.id); }}
+                  android_ripple={{ color: C.surface }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: isSel }}
                   style={[styles.card, isSel && { borderColor: C.flow, borderWidth: 2, backgroundColor: C.surface }]}
                 >
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={st.predId}>{x.id}</Text>
-                    <Text style={styles.eta}>{x.arrived ? 'Arrived' : `${fmt(Math.max(1, x.etaMin))} min`}</Text>
+                    <Text style={styles.eta}>{cardStatus(x, deliveries.find((d) => d.shipmentId === x.id))}</Text>
                   </View>
                   <Text style={st.small}>{x.cargo}</Text>
                   <View style={styles.bar}><View style={{ height: 3, width: `${x.progress * 100}%`, backgroundColor: C.flow }} /></View>
@@ -145,6 +163,7 @@ export default function Shipments() {
           <KV label="Speed" value={`${fmt(sh.speedKmh)} km/h`} />
           <KV label="Carrier" value={sh.carrier} />
           <KV label="From" value={sh.origin} />
+          {delivery && <DeliveryInfo d={delivery} />}
           <PhoneTracker sh={sh} />
           <Text style={[st.panelTitle, { marginTop: 16, marginBottom: 6 }]}>Trip log</Text>
           <Alarms events={events.filter((e) => e.asset === sh.id)} limit={5} empty="Nothing logged yet. Entering the geofence and arriving show up here." />
@@ -156,8 +175,8 @@ export default function Shipments() {
 }
 
 const styles = StyleSheet.create({
-  showAll: { position: 'absolute', top: 10, left: 10, backgroundColor: C.surface, borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 10, paddingVertical: 7 },
-  card: { backgroundColor: C.surface2, borderWidth: 1, borderColor: C.rule, borderRadius: S.radiusS, padding: 10, gap: 3 },
+  showAll: { position: 'absolute', top: S.gutter + 8, left: S.gutter + 8, minHeight: 44, justifyContent: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 14, overflow: 'hidden' },
+  card: { minHeight: 64, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.rule, borderRadius: S.radiusS, padding: 12, gap: 3, overflow: 'hidden' },
   eta: { fontFamily: F.num, fontSize: 16, color: C.ink },
   bar: { height: 3, backgroundColor: C.rule, marginTop: 4, overflow: 'hidden' },
   etaBig: { fontFamily: F.numBold, fontSize: 34, color: C.ink },

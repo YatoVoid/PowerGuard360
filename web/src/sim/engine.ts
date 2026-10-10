@@ -1,6 +1,7 @@
 import type {
-  Ambient, HistoryPoint, PlantEvent, PlantState, Prediction, Severity, Shipment, StepInputs, Turbine,
+  Ambient, Delivery, HistoryPoint, PlantEvent, PlantState, Prediction, Severity, Shipment, StepInputs, Turbine, TurbineSensors,
 } from "../types";
+import { deliveryTarget, pathLength, pointOnPath } from "./site";
 
 // All plant numbers here are illustrative. Real turbine data replaces this module's output later;
 // the screens only read PlantState.
@@ -17,6 +18,13 @@ const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
 export const SHIPMENT_REPLAY_SPEED = 12;
 export const GEOFENCE_KM = 3;
+// The sensor board on the table feeds GT-08; every other unit's sensors are simulated.
+export const LIVE_SENSOR_UNIT = "GT-08";
+// Walking pace on site, replayed faster for the demo the same way the trucks are.
+export const WALK_M_PER_S = 1.3;
+export const SITE_REPLAY_SPEED = 3;
+const UNLOAD_S = 20;
+const CREWS = ["Crew A", "Crew B", "Crew C"];
 
 export const SITE_LON_LAT: [number, number] = [-103.56, 31.37];
 
@@ -87,6 +95,17 @@ function makeTurbine(i: number): Turbine {
     fuelFlowKgS: 15,
     efficiencyPct: 38.5,
     runHours: 4200 + i * 611,
+    sensors: { inletPressureHpa: 1009.2 + (i % 3) * 0.2, inletTempC: 32 + (i % 4) * 0.4, airQualityRaw: 130 + i * 4, flameRaw: 2780, source: "sim" },
+  };
+}
+
+function simSensors(tb: Turbine, i: number, t: number, rnd: () => number, running: boolean): TurbineSensors {
+  return {
+    inletPressureHpa: 1009.2 + 0.6 * Math.sin(t / 400) + (i % 3) * 0.2 + (rnd() - 0.5) * 0.1,
+    inletTempC: 32 + (i % 4) * 0.4 + 0.8 * Math.sin(t / 600) + (rnd() - 0.5) * 0.2,
+    airQualityRaw: Math.max(40, tb.sensors.airQualityRaw + (130 + i * 4 - tb.sensors.airQualityRaw) * 0.05 + (rnd() - 0.5) * 5),
+    flameRaw: running ? 2780 + (rnd() - 0.5) * 60 : 40,
+    source: "sim",
   };
 }
 
@@ -139,9 +158,6 @@ export function initialShipments(): Shipment[] {
 
 export function createPlant(seed = 7): PlantState {
   const turbines = Array.from({ length: TURBINE_COUNT }, (_, i) => makeTurbine(i));
-  turbines[7].status = "offline";
-  turbines[7].tripCause = "Planned maintenance";
-  turbines[7].outputMw = 0;
   const tempHistory: Record<string, number[]> = {};
   for (const tb of turbines) tempHistory[tb.id] = [];
   return {
@@ -155,8 +171,9 @@ export function createPlant(seed = 7): PlantState {
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
     ambient: { pressureHpa: 1009.2, temperatureC: 31, airQualityRaw: 140, lightRaw: 2800, source: "sim", lastSeenMs: null },
     shipments: initialShipments(),
+    deliveries: [],
     predictions: [],
-    events: [{ id: 0, t: 0, severity: "info", asset: "GT-08", text: "GT-08 offline for planned maintenance" }],
+    events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the site sensor board when it is connected` }],
     history: [],
     tempHistory,
     excessHistory: {},
@@ -224,7 +241,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
       airQualityRaw: Math.max(40, ambient.airQualityRaw + (rnd() - 0.5) * 6),
     };
   }
-  const derate = derateFactor(ambient.pressureHpa, ambient.temperatureC);
   const demandMw = demandAt(t, rnd);
 
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
@@ -247,15 +263,31 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     }
   }
 
-  // The light sensor stands in for GT-01's flame detector: cover it and the unit trips.
-  const gt1 = turbines[0];
-  if (ambient.source === "live" && ambient.lightRaw < LIGHT_TRIP_THRESHOLD && gt1.status !== "tripped" && gt1.status !== "offline") {
-    gt1.status = "tripped"; gt1.tripCause = "Flame detector lost signal"; gt1.outputMw = 0;
-    log("trip", gt1.id, "GT-01 tripped: flame detector lost signal");
+  turbines.forEach((tb, i) => {
+    const running = tb.status === "running" || tb.status === "watch";
+    if (tb.id === LIVE_SENSOR_UNIT && ambient.source === "live") {
+      tb.sensors = {
+        inletPressureHpa: ambient.pressureHpa,
+        inletTempC: ambient.temperatureC,
+        airQualityRaw: ambient.airQualityRaw,
+        flameRaw: ambient.lightRaw,
+        source: "live",
+      };
+    } else {
+      tb.sensors = simSensors(tb, i, t, rnd, running);
+    }
+    // Each unit's capacity follows its own inlet air: thinner, hotter air makes less power.
+    tb.capacityMw = tb.ratedMw * derateFactor(tb.sensors.inletPressureHpa, tb.sensors.inletTempC);
+  });
+
+  // The light sensor is GT-08's flame detector: cover it and the unit trips.
+  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT);
+  if (live && live.sensors.source === "live" && live.sensors.flameRaw < LIGHT_TRIP_THRESHOLD && (live.status === "running" || live.status === "watch")) {
+    live.status = "tripped"; live.tripCause = "Flame detector lost signal"; live.outputMw = 0;
+    log("trip", live.id, `${live.id} tripped: flame detector lost signal`);
   }
 
   const available = turbines.filter((x) => x.status === "running" || x.status === "watch");
-  for (const tb of turbines) tb.capacityMw = tb.ratedMw * derate;
   const share = available.length ? demandMw / available.length : 0;
 
   for (const tb of turbines) {
@@ -334,6 +366,37 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     return s;
   });
 
+  const deliveries: Delivery[] = prev.deliveries.map((d) => ({ ...d }));
+  shipments.forEach((sh, i) => {
+    if (!sh.arrived || deliveries.some((d) => d.shipmentId === sh.id)) return;
+    const target = deliveryTarget(sh.forAsset);
+    deliveries.push({
+      shipmentId: sh.id, cargo: sh.cargo, crew: CREWS[i % CREWS.length], workers: i === 1 ? 2 : 3,
+      toAsset: sh.forAsset, toLabel: target.label, path: target.path,
+      status: "unloading", unloadLeftS: UNLOAD_S, progress: 0, pos: target.path[0], etaMin: 0, deliveredT: null,
+    });
+    log("info", sh.id, `${CREWS[i % CREWS.length]} unloading ${sh.id} at the dock`);
+  });
+  const stepM = WALK_M_PER_S * SITE_REPLAY_SPEED;
+  for (const d of deliveries) {
+    const len = pathLength(d.path);
+    if (d.status === "unloading") {
+      d.unloadLeftS = Math.max(0, d.unloadLeftS - 1);
+      if (d.unloadLeftS === 0) {
+        d.status = "carrying";
+        log("info", d.shipmentId, `${d.crew} carrying ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
+      }
+    } else if (d.status === "carrying") {
+      d.progress = Math.min(1, d.progress + stepM / len);
+      d.pos = pointOnPath(d.path, d.progress);
+      if (d.progress >= 1) {
+        d.status = "delivered"; d.deliveredT = t;
+        log("info", d.shipmentId, `${d.crew} delivered ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
+      }
+    }
+    d.etaMin = d.status === "delivered" ? 0 : (d.unloadLeftS + ((1 - d.progress) * len) / stepM) / 60;
+  }
+
   const tempHistory: Record<string, number[]> = {};
   const excessHistory: Record<string, number[]> = {};
   for (const tb of turbines) {
@@ -363,6 +426,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     battery,
     ambient,
     shipments,
+    deliveries,
     predictions,
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],

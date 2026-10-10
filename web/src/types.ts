@@ -2,6 +2,14 @@ export type Source = "live" | "sim";
 
 export type TurbineStatus = "running" | "watch" | "tripped" | "offline";
 
+export interface TurbineSensors {
+  inletPressureHpa: number;
+  inletTempC: number;
+  airQualityRaw: number;
+  flameRaw: number;
+  source: Source;
+}
+
 export interface Turbine {
   id: string;
   status: TurbineStatus;
@@ -15,6 +23,7 @@ export interface Turbine {
   fuelFlowKgS: number;
   efficiencyPct: number;
   runHours: number;
+  sensors: TurbineSensors;
 }
 
 export interface Ambient {
@@ -61,6 +70,24 @@ export interface Shipment {
 
 export type Severity = "info" | "watch" | "trip";
 
+export type DeliveryStatus = "waiting" | "unloading" | "carrying" | "delivered";
+
+export interface Delivery {
+  shipmentId: string;
+  cargo: string;
+  crew: string;
+  workers: number;
+  toAsset: string;
+  toLabel: string;
+  path: [number, number][];
+  status: DeliveryStatus;
+  unloadLeftS: number;
+  progress: number;
+  pos: [number, number];
+  etaMin: number;
+  deliveredT: number | null;
+}
+
 export interface PlantEvent {
   id: number;
   t: number;
@@ -88,6 +115,7 @@ export interface PlantState {
   battery: Battery;
   ambient: Ambient;
   shipments: Shipment[];
+  deliveries: Delivery[];
   predictions: Prediction[];
   events: PlantEvent[];
   history: HistoryPoint[];

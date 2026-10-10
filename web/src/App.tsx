@@ -77,7 +77,7 @@ function DashboardView() {
       <Panel title="Turbine fleet" className="d-fleet"><TurbineStrip /></Panel>
       <Panel title="Selected" className="d-detail"><AssetDetail /></Panel>
       <Panel title="Overheat forecast" className="d-pred"><PredictionList /></Panel>
-      <Panel title="Site sensors" aside={<SourceTag source={source} />} className="d-sensors"><SensorPanel /></Panel>
+      <Panel title="GT-08 sensor board" aside={<SourceTag source={source} />} className="d-sensors"><SensorPanel /></Panel>
       <Panel title="Alarms and events" className="d-alarms"><AlarmList events={events} limit={12} /></Panel>
     </div>
   );

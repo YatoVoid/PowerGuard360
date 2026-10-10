@@ -1,9 +1,10 @@
+import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 
-import { TRIP_TEMP_C, WATCH_TEMP_C } from '@engine/sim/engine';
-import type { HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
+import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from '@engine/sim/engine';
+import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
 import { useStore } from '@/state/store';
 import { C, F, S, clockOf, fmt } from '@/ui/theme';
 
@@ -56,10 +57,14 @@ export function KV({ label, value, watch }: { label: string; value: string; watc
   );
 }
 
+export const tap = () => { Haptics.selectionAsync().catch(() => {}); };
+
 export function Btn({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => { tap(); onPress(); }}
+      android_ripple={{ color: danger ? C.tripBg : C.surface2 }}
+      hitSlop={6}
       accessibilityRole="button"
       style={({ pressed }) => [st.btn, danger && { borderColor: C.trip }, pressed && { backgroundColor: danger ? C.trip : C.surface2 }]}
     >
@@ -144,7 +149,7 @@ function tileColors(status: Turbine['status']) {
   return { bg: C.surface, border: C.rule, ink: C.ink, bar: C.ink2 };
 }
 
-export function TurbineTiles() {
+export function TurbineTiles({ onPick }: { onPick?: () => void }) {
   const turbines = useStore((s) => s.plant.turbines);
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
@@ -157,13 +162,17 @@ export function TurbineTiles() {
         return (
           <Pressable
             key={tb.id}
-            onPress={() => select(tb.id)}
+            onPress={() => { tap(); select(tb.id); onPick?.(); }}
+            android_ripple={{ color: C.surface2 }}
             accessibilityRole="button"
             accessibilityState={{ selected: isSel }}
             accessibilityLabel={`${tb.id}, ${tb.status}, ${fmt(tb.outputMw)} megawatts`}
             style={[st.tile, { backgroundColor: c.bg, borderColor: isSel ? C.flow : c.border, opacity: tb.status === 'offline' ? 0.6 : 1 }, isSel && { borderWidth: 2 }]}
           >
-            <Text style={[st.tileId, { color: c.ink }]}>{tb.id}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[st.tileId, { color: c.ink }]}>{tb.id}</Text>
+              {tb.sensors.source === 'live' && <View style={st.liveDot} accessibilityLabel="live sensors" />}
+            </View>
             <Text style={[st.tileMw, { color: c.ink }]}>{on ? fmt(tb.outputMw) : '0'}<Text style={[st.statUnit, { color: c.ink }]}> MW</Text></Text>
             <Text style={[st.tileMeta, { color: c.ink }]}>{tb.status === 'running' ? `${fmt(tb.exhaustTempC)} °C` : tb.status}</Text>
             <View style={st.tileBar}><View style={{ height: 4, width: `${(tb.outputMw / tb.ratedMw) * 100}%`, backgroundColor: c.bar }} /></View>
@@ -212,6 +221,14 @@ export function TurbineDetail() {
       <KV label="Speed" value={`${fmt(tb.rpm)} rpm`} />
       <KV label="Fuel flow" value={`${fmt(tb.fuelFlowKgS, 1)} kg/s`} />
       <KV label="Efficiency" value={`${fmt(tb.efficiencyPct, 1)} %`} />
+      <View style={[st.panelHead, { marginTop: 14, marginBottom: 4 }]}>
+        <Text style={st.panelTitle}>Unit sensors</Text>
+        <SourceTag source={tb.sensors.source} />
+      </View>
+      <KV label="Inlet pressure" value={`${fmt(tb.sensors.inletPressureHpa, 1)} hPa`} />
+      <KV label="Inlet air temp" value={`${fmt(tb.sensors.inletTempC, 1)} °C`} />
+      <KV label="Air quality (raw)" value={fmt(tb.sensors.airQualityRaw)} />
+      <KV label="Flame detector" value={fmt(tb.sensors.flameRaw)} />
       <View style={st.trendRow}>
         <Text style={st.small}>Exhaust temp, last 3 min</Text>
         <Spark values={plant.tempHistory[tb.id] ?? []} />
@@ -220,7 +237,16 @@ export function TurbineDetail() {
         <Text style={st.forecast}>Reaches the {TRIP_TEMP_C} °C trip limit in about {fmt(pred.minutesToLimit, 1)} min at the current trend.</Text>
       )}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-        {(tb.status === 'running' || tb.status === 'watch') && <Btn danger label={`Trip ${tb.id}`} onPress={() => trip(tb.id)} />}
+        {(tb.status === 'running' || tb.status === 'watch') && (
+          <Btn
+            danger
+            label={`Trip ${tb.id}`}
+            onPress={() => Alert.alert(`Trip ${tb.id}?`, 'The unit drops to 0 MW and the battery covers the gap.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: `Trip ${tb.id}`, style: 'destructive', onPress: () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {}); trip(tb.id); } },
+            ])}
+          />
+        )}
         {tb.status === 'tripped' && <Btn label="Reset and restart" onPress={() => reset(tb.id)} />}
       </View>
     </View>
@@ -235,7 +261,7 @@ export function Predictions() {
     <View style={{ gap: 6 }}>
       {flagged.length === 0 && <Text style={st.small}>No turbine is trending toward a limit.</Text>}
       {flagged.map((p) => (
-        <Pressable key={p.turbineId} onPress={() => select(p.turbineId)} style={st.pred} accessibilityRole="button">
+        <Pressable key={p.turbineId} onPress={() => { tap(); select(p.turbineId); }} android_ripple={{ color: C.surface }} style={st.pred} accessibilityRole="button">
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <Text style={st.predId}>{p.turbineId}</Text>
             <Text style={st.body}>Overheat {p.minutesToLimit !== null ? `in ~${fmt(p.minutesToLimit, 1)} min` : 'risk rising'}</Text>
@@ -255,10 +281,31 @@ export function Sensors() {
       <KV label="Barometric pressure" value={`${fmt(a.pressureHpa, 1)} hPa`} />
       <KV label="Ambient temp" value={`${fmt(a.temperatureC, 1)} °C`} />
       <KV label="Air quality (raw)" value={fmt(a.airQualityRaw)} />
-      <KV label="GT-01 flame detector" value={fmt(a.lightRaw)} />
+      <KV label="Flame detector (light)" value={fmt(a.lightRaw)} />
       <Text style={[st.small, { marginTop: 8 }]}>
-        {a.source === 'live' ? 'Readings from the site sensor board.' : 'No sensor board connected. Showing simulated readings.'}
+        {a.source === 'live'
+          ? `Live readings feed ${LIVE_SENSOR_UNIT}. Covering the light sensor trips it.`
+          : `No sensor board connected. ${LIVE_SENSOR_UNIT} shows simulated readings like the other units.`}
       </Text>
+    </View>
+  );
+}
+
+export function DeliveryInfo({ d }: { d: Delivery }) {
+  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
+  return (
+    <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.rule }}>
+      <Text style={[st.panelTitle, { marginBottom: 6 }]}>On site</Text>
+      <Text style={st.body}>
+        {d.status === 'unloading' && `${d.crew} (${d.workers} people) unloading at the dock. Parts reach the ${d.toLabel} in ${eta}.`}
+        {d.status === 'carrying' && `${d.crew} (${d.workers} people) carrying the parts to the ${d.toLabel}. Arrives in ${eta}.`}
+        {d.status === 'delivered' && `${d.crew} delivered the parts to the ${d.toLabel}.`}
+      </Text>
+      {d.status !== 'delivered' && (
+        <View style={[st.meter, { marginTop: 8, height: 4 }]}>
+          <View style={{ height: 4, width: `${(d.status === 'unloading' ? 0 : d.progress) * 100}%`, backgroundColor: C.flow }} />
+        </View>
+      )}
     </View>
   );
 }
@@ -299,7 +346,7 @@ export const st = StyleSheet.create({
   kv: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: C.surface2, gap: 12 },
   kvLabel: { fontFamily: F.regular, fontSize: 15, color: C.ink2, flexShrink: 1 },
   kvValue: { fontFamily: F.num, fontSize: 16, color: C.ink, fontVariant: ['tabular-nums'], paddingHorizontal: 2 },
-  btn: { borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: C.surface },
+  btn: { minHeight: 48, justifyContent: 'center', borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 16, backgroundColor: C.surface, overflow: 'hidden' },
   btnText: { fontFamily: F.semibold, fontSize: 15, color: C.ink },
   stats: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
   stat: { width: '50%', borderTopWidth: 1, borderTopColor: C.rule, paddingTop: 6, paddingRight: 8 },
@@ -310,7 +357,8 @@ export const st = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendSwatch: { width: 14, height: 3 },
   legendText: { fontFamily: F.regular, fontSize: 13, color: C.ink2 },
-  tile: { width: 132, padding: 10, borderWidth: 1, borderRadius: S.radiusS, gap: 1 },
+  tile: { width: 136, minHeight: 96, padding: 12, borderWidth: 1, borderRadius: S.radiusS, gap: 1, overflow: 'hidden' },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.flow },
   tileId: { fontFamily: F.bold, fontSize: 13 },
   tileMw: { fontFamily: F.num, fontSize: 22, fontVariant: ['tabular-nums'] },
   tileMeta: { fontFamily: F.regular, fontSize: 12, opacity: 0.8, textTransform: 'capitalize' },
@@ -325,7 +373,7 @@ export const st = StyleSheet.create({
   small: { fontFamily: F.regular, fontSize: 13, color: C.ink2 },
   body: { fontFamily: F.regular, fontSize: 15, color: C.ink },
   forecast: { fontFamily: F.medium, fontSize: 14, color: C.watchInk, backgroundColor: C.watchBg, borderColor: C.watch, borderWidth: 1, borderRadius: S.radiusS, padding: 10, marginTop: 10 },
-  pred: { backgroundColor: C.surface2, borderWidth: 1, borderColor: C.rule, borderRadius: S.radiusS, padding: 10, gap: 6 },
+  pred: { minHeight: 56, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.rule, borderRadius: S.radiusS, padding: 12, gap: 6, overflow: 'hidden' },
   predId: { fontFamily: F.bold, fontSize: 15, color: C.ink },
   meter: { height: 6, backgroundColor: C.rule, overflow: 'hidden', borderRadius: 3 },
   alarm: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 7, borderRadius: S.radiusS },

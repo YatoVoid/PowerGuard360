@@ -45,10 +45,10 @@ window.update=(d)=>{
   if(!mk){const el=document.createElement('div');el.className='pin';el.textContent=x.id;el.onclick=(e)=>{e.stopPropagation();send({type:'select',id:x.id})};mk=markers[x.id]=new maplibregl.Marker({element:el}).setLngLat(x.pos).addTo(m)}
   mk.setLngLat(x.pos);const el=mk.getElement();el.classList.toggle('sel',x.sel);el.classList.toggle('arr',x.arrived);
  }
- if(!fitted){fitted=true;const b=new maplibregl.LngLatBounds();d.items.forEach(x=>{x.driven.forEach(p=>b.extend(p));x.ahead.forEach(p=>b.extend(p))});m.fitBounds(b,{padding:40,duration:0})}
+ if(!fitted){fitted=true;window.fitRoutes=()=>{const b=new maplibregl.LngLatBounds();d.items.forEach(x=>{x.driven.forEach(p=>b.extend(p));x.ahead.forEach(p=>b.extend(p))});m.resize();m.fitBounds(b,{padding:{top:70,bottom:30,left:30,right:30},duration:0})};setTimeout(window.fitRoutes,250)}
 };
 window.focusOn=(p)=>m.flyTo({center:p,zoom:Math.max(m.getZoom(),9.5),duration:1200});
-window.showAll=()=>{const b=new maplibregl.LngLatBounds();Object.values(markers).forEach(k=>b.extend(k.getLngLat()));b.extend(site);m.fitBounds(b,{padding:50,duration:1000})};
+window.showAll=()=>{if(window.fitRoutes)window.fitRoutes()};
 </script></body></html>`;
 
 export function ShipmentMap({ shipments, selectedId, onSelect, showAllKey }: {
@@ -105,6 +105,6 @@ export function ShipmentMap({ shipments, selectedId, onSelect, showAllKey }: {
 }
 
 const styles = StyleSheet.create({
-  box: { height: 320, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.rule, backgroundColor: '#e9e9e4' },
+  box: { flex: 1, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.rule, backgroundColor: '#e9e9e4' },
   web: { flex: 1, backgroundColor: '#e9e9e4' },
 });
