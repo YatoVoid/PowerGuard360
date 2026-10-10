@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Line, OrbitControls, Sky } from "@react-three/drei";
+import { Html, Line, OrbitControls, PerformanceMonitor, Sky } from "@react-three/drei";
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore } from "../store";
 import type { Turbine } from "../types";
@@ -91,11 +92,56 @@ function assetPosition(id: string | null): V3 | null {
   return null;
 }
 
-function Box({ p, s, c, cast = true, rough = 0.75, metal = 0.1 }: { p: V3; s: V3; c: string; cast?: boolean; rough?: number; metal?: number }) {
+function Box({ p, s, c, cast = false, rough = 0.75, metal = 0.1 }: { p: V3; s: V3; c: string; cast?: boolean; rough?: number; metal?: number }) {
   return (
     <mesh position={p} castShadow={cast} receiveShadow>
       <boxGeometry args={s} />
       <meshStandardMaterial color={c} roughness={rough} metalness={metal} />
+    </mesh>
+  );
+}
+
+type BoxSpec = { p: V3; s: V3; c: string };
+type BeamSpec = { a: V3; b: V3; r: number; c: string };
+type BallSpec = { p: V3; r: number; c: string };
+
+function paint(g: THREE.BufferGeometry, hex: string) {
+  const col = new THREE.Color(hex);
+  const n = g.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { arr[i * 3] = col.r; arr[i * 3 + 1] = col.g; arr[i * 3 + 2] = col.b; }
+  g.setAttribute("color", new THREE.BufferAttribute(arr, 3));
+  return g;
+}
+
+// Static parts that never change are merged into one mesh, with their colors stored per vertex.
+// That turns hundreds of draw calls into a handful.
+function buildMerged(boxes: BoxSpec[] = [], beams: BeamSpec[] = [], balls: BallSpec[] = []) {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const b of boxes) parts.push(paint(new THREE.BoxGeometry(...b.s).translate(...b.p), b.c));
+  const up = new THREE.Vector3(0, 1, 0);
+  for (const b of beams) {
+    const a = new THREE.Vector3(...b.a), e = new THREE.Vector3(...b.b);
+    const dir = e.clone().sub(a);
+    const g = new THREE.CylinderGeometry(b.r, b.r, dir.length(), b.r > 1 ? 18 : 6);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir.normalize()));
+    const mid = a.add(e).multiplyScalar(0.5);
+    parts.push(paint(g.translate(mid.x, mid.y, mid.z), b.c));
+  }
+  for (const b of balls) parts.push(paint(new THREE.SphereGeometry(b.r, 16, 12).translate(...b.p), b.c));
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((g) => g.dispose());
+  return merged ?? new THREE.BufferGeometry();
+}
+
+function Merged({ boxes, beams, balls, cast = false, rough = 0.7, metal = 0.12 }: {
+  boxes?: BoxSpec[]; beams?: BeamSpec[]; balls?: BallSpec[]; cast?: boolean; rough?: number; metal?: number;
+}) {
+  const geo = useMemo(() => buildMerged(boxes, beams, balls), [boxes, beams, balls]);
+  useEffect(() => () => geo.dispose(), [geo]);
+  return (
+    <mesh geometry={geo} castShadow={cast} receiveShadow>
+      <meshStandardMaterial vertexColors roughness={rough} metalness={metal} />
     </mesh>
   );
 }
@@ -178,6 +224,21 @@ function Label({ id, className = "", children }: { id: string; className?: strin
   );
 }
 
+const TURBINE_BOXES: BoxSpec[] = [
+  { p: [0, 3, -72], s: [7, 6, 9], c: "#8b918d" },
+  { p: [0, 13, -60], s: [10, 9, 8], c: STEEL },
+  { p: [-4, 4.3, -63], s: [0.6, 8.6, 0.6], c: "#5c625e" },
+  { p: [4, 4.3, -63], s: [0.6, 8.6, 0.6], c: "#5c625e" },
+  { p: [0, 7, -56], s: [4, 4, 3], c: STEEL },
+  { p: [0, 4, -48], s: [8, 8, 14], c: "#c3c6bf" },
+  { p: [0, 6, -38], s: [7, 8, 6], c: "#9da39e" },
+  { p: [0, 10, -23], s: [11, 20, 24], c: CLAD },
+  { p: [0, 20.3, -23], s: [11.4, 0.6, 24.4], c: "#a9aea8" },
+  { p: [0, 33, -9], s: [5.6, 0.5, 5.6], c: "#5c625e" },
+  { p: [8, 2.6, -74], s: [5, 5.2, 4.5], c: "#6f7672" },
+];
+const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#7d837f" }];
+
 function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; selected: boolean }) {
   const x = UNIT_X(index);
   const color = STATUS_COLOR[tb.status];
@@ -196,30 +257,12 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   return (
     <Selectable id={tb.id}>
       <group position={[x, 0, 0]}>
-        {/* generator, cold end */}
-        <Box p={[0, 3, -72]} s={[7, 6, 9]} c="#8b918d" />
-        {/* elevated inlet filter house on legs */}
-        <Box p={[0, 13, -60]} s={[10, 9, 8]} c={STEEL} />
-        <Box p={[-4, 4.3, -63]} s={[0.6, 8.6, 0.6]} c="#5c625e" />
-        <Box p={[4, 4.3, -63]} s={[0.6, 8.6, 0.6]} c="#5c625e" />
-        <Box p={[0, 7, -56]} s={[4, 4, 3]} c={STEEL} />
         {/* gas turbine enclosure with status band */}
-        <Box p={[0, 4, -48]} s={[8, 8, 14]} c="#c3c6bf" rough={0.6} metal={0.15} />
+        <Merged boxes={TURBINE_BOXES} beams={TURBINE_BEAMS} cast />
         <mesh position={[0, 8.15, -48]}>
           <boxGeometry args={[8.1, 0.35, 14.1]} />
           <meshStandardMaterial color={color} emissive={alarm ? color : "#000"} emissiveIntensity={alarm ? 1.5 : 0} toneMapped={!alarm} />
         </mesh>
-        {/* exhaust diffuser into the HRSG */}
-        <Box p={[0, 6, -38]} s={[7, 8, 6]} c="#9da39e" />
-        {/* heat recovery steam generator */}
-        <Box p={[0, 10, -23]} s={[11, 20, 24]} c={CLAD} rough={0.7} />
-        <Box p={[0, 20.3, -23]} s={[11.4, 0.6, 24.4]} c="#a9aea8" />
-        {/* stack on the HRSG outlet */}
-        <mesh position={[0, 18, -9]} castShadow>
-          <cylinderGeometry args={[2.2, 2.5, 36, 18]} />
-          <meshStandardMaterial color="#7d837f" roughness={0.5} metalness={0.4} />
-        </mesh>
-        <Box p={[0, 33, -9]} s={[5.6, 0.5, 5.6]} c="#5c625e" cast={false} />
         <BeaconLight position={[0, 36.6, -9]} />
         <group ref={plume} position={[0, 0, -9]}>
           {[0, 1, 2].map((i) => (
@@ -229,8 +272,6 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
             </mesh>
           ))}
         </group>
-        {/* generator step-up transformer */}
-        <Box p={[8, 2.6, -74]} s={[5, 5.2, 4.5]} c="#6f7672" rough={0.6} />
         {selected && (
           <mesh rotation-x={-Math.PI / 2} position={[0, 0.2, -42]}>
             <ringGeometry args={[19, 20.5, 56]} />
@@ -249,8 +290,8 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
 }
 
 // Ribbed look for finned tube bundles and the wind wall, drawn once into a small canvas.
-function useStripeTexture(base: string, line: string, repeat: [number, number]) {
-  return useMemo(() => {
+function useStripeTexture(base: string, line: string, rx: number, ry: number) {
+  const tex = useMemo(() => {
     const c = document.createElement("canvas");
     c.width = 64; c.height = 8;
     const g = c.getContext("2d")!;
@@ -259,37 +300,12 @@ function useStripeTexture(base: string, line: string, repeat: [number, number]) 
     for (let x = 0; x < 64; x += 8) g.fillRect(x, 0, 2, 8);
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(...repeat);
+    tex.repeat.set(rx, ry);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
-  }, [base, line, repeat]);
-}
-
-function Pipe({ from, to, r, c = "#e6e6e1" }: { from: V3; to: V3; r: number; c?: string }) {
-  const { pos, quat, len } = useMemo(() => {
-    const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to);
-    const dir = b.clone().sub(a);
-    return {
-      pos: a.clone().add(b).multiplyScalar(0.5),
-      quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize()),
-      len: dir.length(),
-    };
-  }, [from, to]);
-  return (
-    <mesh position={pos} quaternion={quat} castShadow>
-      <cylinderGeometry args={[r, r, len, 20]} />
-      <meshStandardMaterial color={c} roughness={0.45} metalness={0.15} />
-    </mesh>
-  );
-}
-
-function Elbow({ at, r, c = "#e6e6e1" }: { at: V3; r: number; c?: string }) {
-  return (
-    <mesh position={at} castShadow>
-      <sphereGeometry args={[r * 1.04, 18, 14]} />
-      <meshStandardMaterial color={c} roughness={0.45} metalness={0.15} />
-    </mesh>
-  );
+  }, [base, line, rx, ry]);
+  useEffect(() => () => tex.dispose(), [tex]);
+  return tex;
 }
 
 // Air-cooled condenser, after a standard A-frame design: axial fans at deck level push air up through
@@ -304,13 +320,54 @@ const ACC = {
   fansPerStreet: 6,
 };
 
+function accSpecs() {
+  const { streets, width, z0, z1, deck, apex } = ACC;
+  const len = z1 - z0, zc = (z0 + z1) / 2, half = width / 2;
+  const xMin = streets[0] - half - 0.5, xMax = streets[streets.length - 1] + half + 0.5;
+  const colX = [xMin, ...streets.slice(1).map((x) => x - half - 0.5), xMax];
+  const colZ = [z0, z0 + len * 0.25, z0 + len * 0.5, z0 + len * 0.75, z1];
+  const steel = "#7a807c", beam = "#8a908b", white = "#e6e6e1", cond = "#b8bdb8";
+  const frameBoxes: BoxSpec[] = [];
+  const frameBeams: BeamSpec[] = [];
+  for (const x of colX) for (const z of colZ) frameBoxes.push({ p: [x, deck / 2, z], s: [0.9, deck, 0.9], c: steel });
+  for (const x of colX) frameBoxes.push({ p: [x, deck - 0.3, zc], s: [0.8, 0.8, len + 1], c: beam });
+  for (const z of colZ) frameBoxes.push({ p: [(xMin + xMax) / 2, deck - 0.3, z], s: [xMax - xMin, 0.8, 0.8], c: beam });
+  const brace = (a: V3, b: V3) => frameBeams.push({ a, b, r: 0.18, c: steel });
+  for (let i = 0; i < colZ.length - 1; i++) for (const x of [xMin, xMax]) {
+    brace([x, 0.5, colZ[i]], [x, deck - 1, colZ[i + 1]]); brace([x, deck - 1, colZ[i]], [x, 0.5, colZ[i + 1]]);
+  }
+  for (let i = 0; i < colX.length - 1; i++) for (const z of [z0, z1]) {
+    brace([colX[i], 0.5, z], [colX[i + 1], deck - 1, z]); brace([colX[i], deck - 1, z], [colX[i + 1], 0.5, z]);
+  }
+  const top = apex + 0.6;
+  const pipeBeams: BeamSpec[] = [
+    { a: [-136, 14, -58], b: [-140, 14, -58], r: 2.4, c: white },
+    { a: [-140, 14, -58], b: [-140, 14, -90], r: 2.4, c: white },
+    { a: [-140, 14, -90], b: [-140, top, -90], r: 2.4, c: white },
+    { a: [-140, top, -90], b: [streets[0], top, -90], r: 2, c: white },
+  ];
+  const pipeBalls: BallSpec[] = [
+    { p: [-140, 14, -58], r: 2.5, c: white }, { p: [-140, 14, -90], r: 2.5, c: white }, { p: [-140, top, -90], r: 2.5, c: white },
+  ];
+  for (const x of streets) {
+    pipeBalls.push({ p: [x, top, -90], r: 2.08, c: white });
+    pipeBeams.push(
+      { a: [x, top, -90], b: [x, top, z0 - 6], r: 1.6, c: white },
+      { a: [x, top, z0 - 6], b: [x, top, z1], r: 1.3, c: white },
+      { a: [x - half + 0.4, deck + 0.4, z0], b: [x - half + 0.4, deck + 0.4, z1], r: 0.35, c: cond },
+      { a: [x + half - 0.4, deck + 0.4, z0], b: [x + half - 0.4, deck + 0.4, z1], r: 0.35, c: cond },
+    );
+  }
+  return { frameBoxes, frameBeams, pipeBeams, pipeBalls };
+}
+const ACC_SPECS = accSpecs();
+
 function AirCooledCondenser() {
-  const output = useStore((s) => s.plant.outputMw);
   const fans = useRef<THREE.InstancedMesh>(null);
   const angle = useRef(0);
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const finTex = useStripeTexture("#5d6460", "#3f4542", [24, 1]);
-  const wallTex = useStripeTexture("#dcdcd6", "#c9cac3", [40, 1]);
+  const finTex = useStripeTexture("#5d6460", "#3f4542", 24, 1);
+  const wallTex = useStripeTexture("#dcdcd6", "#c9cac3", 40, 1);
   const { streets, width, z0, z1, deck, apex, fansPerStreet } = ACC;
   const len = z1 - z0;
   const zc = (z0 + z1) / 2;
@@ -323,7 +380,7 @@ function AirCooledCondenser() {
 
   useFrame((_, dt) => {
     if (!fans.current) return;
-    angle.current += dt * (0.6 + 5 * (output / 2700));
+    angle.current += dt * (0.6 + 5 * (useStore.getState().plant.outputMw / 2700));
     let i = 0;
     for (const x of streets) {
       for (let k = 0; k < fansPerStreet; k++) {
@@ -336,92 +393,59 @@ function AirCooledCondenser() {
     fans.current.instanceMatrix.needsUpdate = true;
   });
 
-  const colX = [xMin, ...streets.slice(1).map((x) => x - width / 2 - 0.5), xMax];
-  const colZ = [z0, z0 + len * 0.25, z0 + len * 0.5, z0 + len * 0.75, z1];
-  const braces: { a: V3; b: V3 }[] = [];
-  for (let i = 0; i < colZ.length - 1; i++) {
-    for (const x of [xMin, xMax]) {
-      braces.push({ a: [x, 0.5, colZ[i]], b: [x, deck - 1, colZ[i + 1]] }, { a: [x, deck - 1, colZ[i]], b: [x, 0.5, colZ[i + 1]] });
-    }
-  }
-  for (let i = 0; i < colX.length - 1; i++) {
-    for (const z of [z0, z1]) {
-      braces.push({ a: [colX[i], 0.5, z], b: [colX[i + 1], deck - 1, z] }, { a: [colX[i], deck - 1, z], b: [colX[i + 1], 0.5, z] });
-    }
-  }
   const wallH = apex + 1 - deck;
   const wallY = deck + wallH / 2;
+  const shrouds = useRef<THREE.InstancedMesh>(null);
+  useEffect(() => {
+    if (!shrouds.current) return;
+    const o = new THREE.Object3D();
+    let i = 0;
+    for (const x of streets) for (let k = 0; k < fansPerStreet; k++) {
+      o.position.set(x, deck - 0.6, z0 + fanPitch * (k + 0.5));
+      o.updateMatrix();
+      shrouds.current.setMatrixAt(i++, o.matrix);
+    }
+    shrouds.current.instanceMatrix.needsUpdate = true;
+  }, [streets, fansPerStreet, deck, z0, fanPitch]);
 
   return (
     <Selectable id="acc">
     <group>
-      {/* support columns and cross bracing */}
-      {colX.map((x) => colZ.map((z) => <Box key={`${x}${z}`} p={[x, deck / 2, z]} s={[0.9, deck, 0.9]} c="#7a807c" />))}
-      {braces.map((b, i) => <Pipe key={i} from={b.a} to={b.b} r={0.18} c="#7a807c" />)}
-      {/* deck beams between fan rows */}
-      {colX.map((x) => <Box key={`bx${x}`} p={[x, deck - 0.3, zc]} s={[0.8, 0.8, len + 1]} c="#8a908b" />)}
-      {colZ.map((z) => <Box key={`bz${z}`} p={[(xMin + xMax) / 2, deck - 0.3, z]} s={[xMax - xMin, 0.8, 0.8]} c="#8a908b" />)}
-      {/* fan shrouds and blades */}
-      {streets.map((x) => Array.from({ length: fansPerStreet }, (_, k) => (
-        <mesh key={`${x}-${k}`} position={[x, deck - 0.6, z0 + fanPitch * (k + 0.5)]}>
-          <cylinderGeometry args={[4.3, 4.3, 1.6, 28, 1, true]} />
-          <meshStandardMaterial color="#9ca29d" side={THREE.DoubleSide} />
-        </mesh>
-      )))}
-      <instancedMesh ref={fans} args={[undefined, undefined, fanCount]} castShadow>
+      {/* support columns, deck beams and cross bracing */}
+      <Merged boxes={ACC_SPECS.frameBoxes} beams={ACC_SPECS.frameBeams} cast />
+      <instancedMesh ref={shrouds} args={[undefined, undefined, fanCount]}>
+        <cylinderGeometry args={[4.3, 4.3, 1.6, 28, 1, true]} />
+        <meshStandardMaterial color="#9ca29d" side={THREE.DoubleSide} />
+      </instancedMesh>
+      <instancedMesh ref={fans} args={[undefined, undefined, fanCount]}>
         <boxGeometry args={[7.8, 0.15, 0.8]} />
         <meshStandardMaterial color="#4f5552" />
       </instancedMesh>
-      {/* A-frame tube bundles, steam header on the apex, condensate headers along the base */}
-      {streets.map((x) => (
-        <group key={`a${x}`}>
-          {[-1, 1].map((side) => (
-            <mesh
-              key={side}
-              position={[x + (side * half) / 2, (deck + apex) / 2, zc]}
-              rotation={[0, 0, side * (Math.PI / 2 - tilt)]}
-              castShadow
-              receiveShadow
-            >
-              <boxGeometry args={[0.5, slant, len]} />
-              <meshStandardMaterial map={finTex} roughness={0.85} metalness={0.25} />
-            </mesh>
-          ))}
-          <Pipe from={[x, apex + 0.6, z0 - 6]} to={[x, apex + 0.6, z1]} r={1.3} />
-          <Pipe from={[x - half + 0.4, deck + 0.4, z0]} to={[x - half + 0.4, deck + 0.4, z1]} r={0.35} c="#b8bdb8" />
-          <Pipe from={[x + half - 0.4, deck + 0.4, z0]} to={[x + half - 0.4, deck + 0.4, z1]} r={0.35} c="#b8bdb8" />
-        </group>
-      ))}
+      {/* A-frame tube bundles */}
+      {streets.map((x) => [-1, 1].map((side) => (
+        <mesh
+          key={`${x}${side}`}
+          position={[x + (side * half) / 2, (deck + apex) / 2, zc]}
+          rotation={[0, 0, side * (Math.PI / 2 - tilt)]}
+          receiveShadow
+        >
+          <boxGeometry args={[0.5, slant, len]} />
+          <meshStandardMaterial map={finTex} roughness={0.85} metalness={0.25} />
+        </mesh>
+      )))}
+      {/* steam duct, manifold, apex headers and condensate headers */}
+      <Merged beams={ACC_SPECS.pipeBeams} balls={ACC_SPECS.pipeBalls} cast rough={0.45} metal={0.15} />
       {/* wind wall around the bundles */}
-      <mesh position={[xMin, wallY, zc]} castShadow receiveShadow>
-        <boxGeometry args={[0.4, wallH, len + 0.8]} />
-        <meshStandardMaterial map={wallTex} roughness={0.7} />
-      </mesh>
-      <mesh position={[xMax, wallY, zc]} castShadow receiveShadow>
-        <boxGeometry args={[0.4, wallH, len + 0.8]} />
-        <meshStandardMaterial map={wallTex} roughness={0.7} />
-      </mesh>
-      <mesh position={[(xMin + xMax) / 2, wallY, z1]} castShadow receiveShadow>
-        <boxGeometry args={[xMax - xMin, wallH, 0.4]} />
-        <meshStandardMaterial map={wallTex} roughness={0.7} />
-      </mesh>
-      <mesh position={[(xMin + xMax) / 2, wallY, z0]} castShadow receiveShadow>
-        <boxGeometry args={[xMax - xMin, wallH, 0.4]} />
-        <meshStandardMaterial map={wallTex} roughness={0.7} />
-      </mesh>
-      {/* steam duct: out of the turbine hall, up the riser, across the manifold, into each street header */}
-      <Pipe from={[-136, 14, -58]} to={[-140, 14, -58]} r={2.4} />
-      <Elbow at={[-140, 14, -58]} r={2.4} />
-      <Pipe from={[-140, 14, -58]} to={[-140, 14, -90]} r={2.4} />
-      <Elbow at={[-140, 14, -90]} r={2.4} />
-      <Pipe from={[-140, 14, -90]} to={[-140, apex + 0.6, -90]} r={2.4} />
-      <Elbow at={[-140, apex + 0.6, -90]} r={2.4} />
-      <Pipe from={[-140, apex + 0.6, -90]} to={[streets[0], apex + 0.6, -90]} r={2} />
-      {streets.map((x) => (
-        <group key={`m${x}`}>
-          <Elbow at={[x, apex + 0.6, -90]} r={2} />
-          <Pipe from={[x, apex + 0.6, -90]} to={[x, apex + 0.6, z0 - 6]} r={1.6} />
-        </group>
+      {[
+        { p: [xMin, wallY, zc] as V3, s: [0.4, wallH, len + 0.8] as V3 },
+        { p: [xMax, wallY, zc] as V3, s: [0.4, wallH, len + 0.8] as V3 },
+        { p: [(xMin + xMax) / 2, wallY, z1] as V3, s: [xMax - xMin, wallH, 0.4] as V3 },
+        { p: [(xMin + xMax) / 2, wallY, z0] as V3, s: [xMax - xMin, wallH, 0.4] as V3 },
+      ].map((w, i) => (
+        <mesh key={i} position={w.p} castShadow receiveShadow>
+          <boxGeometry args={w.s} />
+          <meshStandardMaterial map={wallTex} roughness={0.7} />
+        </mesh>
       ))}
       <Html position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
         <Label id="acc" className="tag-muted"><strong>Air-cooled condenser</strong></Label>
@@ -435,12 +459,18 @@ function SteamCycle() {
   return (
     <group>
       {/* steam turbine hall */}
-      <Box p={[-126, 11, -44]} s={[22, 22, 40]} c={CLAD} />
+      <Box p={[-126, 11, -44]} s={[22, 22, 40]} c={CLAD} cast />
       <Box p={[-126, 22.4, -44]} s={[22.4, 0.8, 40.4]} c="#a9aea8" />
       <AirCooledCondenser />
     </group>
   );
 }
+
+const GAS_BOXES: BoxSpec[] = [
+  { p: [118, 2, -34], s: [12, 4, 8], c: "#d5d1c4" },
+  { p: [110, 3, -30], s: [1.2, 6, 1.2], c: GAS },
+  { p: [114, 3, -30], s: [1.2, 6, 1.2], c: GAS },
+];
 
 function GasSupply() {
   return (
@@ -451,9 +481,7 @@ function GasSupply() {
         <meshStandardMaterial color={GAS} roughness={0.5} metalness={0.3} />
       </mesh>
       {/* metering station where the pipeline enters */}
-      <Box p={[118, 2, -34]} s={[12, 4, 8]} c="#d5d1c4" />
-      <Box p={[110, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
-      <Box p={[114, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
+      <Merged boxes={GAS_BOXES} />
       <Html position={[118, 9, -34]} center zIndexRange={[10, 0]}>
         <Label id="gas" className="tag-muted"><strong>Gas metering</strong></Label>
       </Html>
@@ -462,16 +490,28 @@ function GasSupply() {
   );
 }
 
-function Gantry({ x, z }: { x: number; z: number }) {
-  return (
-    <group position={[x, 0, z]}>
-      <Box p={[-4, 6, 0]} s={[0.5, 12, 0.5]} c="#7a807c" />
-      <Box p={[4, 6, 0]} s={[0.5, 12, 0.5]} c="#7a807c" />
-      <Box p={[0, 12, 0]} s={[9, 0.6, 0.6]} c="#7a807c" />
-      <Box p={[0, 1.6, 5]} s={[2, 3.2, 1.6]} c="#9aa09b" />
-    </group>
-  );
+function switchyardSpecs(): { boxes: BoxSpec[]; beams: BeamSpec[] } {
+  const { x, z } = SWITCHYARD;
+  const steel = "#7a807c";
+  const boxes: BoxSpec[] = [];
+  for (const dx of [-14, 0, 14]) for (const dz of [-22, -2, 18]) {
+    const gx = x + dx, gz = z + dz;
+    boxes.push(
+      { p: [gx - 4, 6, gz], s: [0.5, 12, 0.5], c: steel },
+      { p: [gx + 4, 6, gz], s: [0.5, 12, 0.5], c: steel },
+      { p: [gx, 12, gz], s: [9, 0.6, 0.6], c: steel },
+      { p: [gx, 1.6, gz + 5], s: [2, 3.2, 1.6], c: "#9aa09b" },
+    );
+  }
+  // transmission tower leaving the site
+  const tx = x + 40;
+  boxes.push({ p: [tx, 26, z], s: [16, 0.6, 0.6], c: steel }, { p: [tx, 20, z], s: [12, 0.6, 0.6], c: steel });
+  const beams: BeamSpec[] = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([a, b]) => ({
+    a: [tx + a * 2.6, 0, z + b * 2.6] as V3, b: [tx + a * 0.6, 30, z + b * 0.6] as V3, r: 0.3, c: steel,
+  }));
+  return { boxes, beams };
 }
+const SWITCHYARD_SPECS = switchyardSpecs();
 
 function Switchyard() {
   const { x, z } = SWITCHYARD;
@@ -484,18 +524,7 @@ function Switchyard() {
         <meshStandardMaterial color="#c4c0b6" roughness={1} />
       </mesh>
       <Line points={fence} color="#6b6862" lineWidth={1} />
-      {[-14, 0, 14].map((dx) => [-22, -2, 18].map((dz) => <Gantry key={`${dx}${dz}`} x={x + dx} z={z + dz} />))}
-      {/* transmission tower leaving the site */}
-      <group position={[x + 40, 0, z]}>
-        {[[-3, -3], [3, -3], [-3, 3], [3, 3]].map(([a, b], i) => (
-          <mesh key={i} position={[a * 0.55, 15, b * 0.55]} rotation={[b * 0.035, 0, -a * 0.035]}>
-            <boxGeometry args={[0.5, 30, 0.5]} />
-            <meshStandardMaterial color="#7a807c" />
-          </mesh>
-        ))}
-        <Box p={[0, 26, 0]} s={[16, 0.6, 0.6]} c="#7a807c" />
-        <Box p={[0, 20, 0]} s={[12, 0.6, 0.6]} c="#7a807c" />
-      </group>
+      <Merged boxes={SWITCHYARD_SPECS.boxes} beams={SWITCHYARD_SPECS.beams} cast />
       <Html position={[x, 18, z]} center zIndexRange={[10, 0]}>
         <Label id="switchyard" className="tag-muted"><strong>Switchyard</strong></Label>
       </Html>
@@ -503,6 +532,18 @@ function Switchyard() {
     </Selectable>
   );
 }
+
+const UTILITY_BOXES: BoxSpec[] = [
+  // lube oil fin-fan coolers
+  ...Array.from({ length: 5 }, (_, i): BoxSpec[] => [
+    { p: [30 + i * 9, 3, -104], s: [8, 2, 7], c: "#a3a8a3" },
+    { p: [30 + i * 9 - 3.4, 1, -107], s: [0.4, 2, 0.4], c: "#5c625e" },
+    { p: [30 + i * 9 + 3.4, 1, -101], s: [0.4, 2, 0.4], c: "#5c625e" },
+    { p: [30 + i * 9, 4.05, -104], s: [5.2, 0.1, 5.2], c: "#5f6561" },
+  ]).flat(),
+  // admin and control building
+  { p: [-120, 4, 72], s: [30, 8, 16], c: "#d8d5cc" },
+];
 
 function Utilities() {
   return (
@@ -513,20 +554,7 @@ function Utilities() {
           <meshStandardMaterial color="#eeeee9" roughness={0.6} />
         </mesh>
       ))}
-      {/* lube oil fin-fan coolers */}
-      {Array.from({ length: 5 }, (_, i) => (
-        <group key={i} position={[30 + i * 9, 0, -104]}>
-          <Box p={[0, 3, 0]} s={[8, 2, 7]} c="#a3a8a3" />
-          <Box p={[-3.4, 1, -3]} s={[0.4, 2, 0.4]} c="#5c625e" />
-          <Box p={[3.4, 1, 3]} s={[0.4, 2, 0.4]} c="#5c625e" />
-          <mesh position={[0, 4.05, 0]} rotation-x={-Math.PI / 2}>
-            <circleGeometry args={[2.8, 18]} />
-            <meshStandardMaterial color="#5f6561" />
-          </mesh>
-        </group>
-      ))}
-      {/* admin and control building */}
-      <Box p={[-120, 4, 72]} s={[30, 8, 16]} c="#d8d5cc" />
+      <Merged boxes={UTILITY_BOXES} />
     </group>
   );
 }
@@ -542,24 +570,35 @@ function FlowLine({ points, mw, max }: { points: V3[]; mw: number; max: number }
   );
 }
 
+// Line geometry is rebuilt whenever its points array changes identity, so these stay module constants.
+const UNIT_LINES: V3[][] = Array.from({ length: 8 }, (_, i) => [[UNIT_X(i) + 8, 7, -76], [UNIT_X(i) + 8, 9, BUS_Z]]);
+const BUS_LINE: V3[] = [[UNIT_X(0) + 8, 9, BUS_Z], [SWITCHYARD.x - 14, 9, BUS_Z], [SWITCHYARD.x - 14, 9, SWITCHYARD.z - 34]];
+const DC_LINE: V3[] = [[SWITCHYARD.x - 20, 9, SWITCHYARD.z + 34], [SWITCHYARD.x - 20, 9, 60], [76, 9, 60]];
+const BATTERY_LINE: V3[] = [[-150, 7, 40], [-150, 9, 60], [-76, 9, 60]];
+const PYLONS: BoxSpec[] = [-90, -30, 30, 90].map((x) => ({ p: [x + 8, 4.5, BUS_Z], s: [0.6, 9, 0.6], c: "#5c625e" }));
+
 function PowerFlow() {
   const turbines = useStore((s) => s.plant.turbines);
   const battery = useStore((s) => s.plant.battery);
   const demand = useStore((s) => s.plant.demandMw);
   const output = useStore((s) => s.plant.outputMw);
-  const sy = SWITCHYARD;
   return (
     <group>
       {turbines.map((tb, i) => (
-        <FlowLine key={tb.id} points={[[UNIT_X(i) + 8, 7, -76], [UNIT_X(i) + 8, 9, BUS_Z]]} mw={tb.outputMw} max={335} />
+        <FlowLine key={tb.id} points={UNIT_LINES[i]} mw={tb.outputMw} max={335} />
       ))}
-      <FlowLine points={[[UNIT_X(0) + 8, 9, BUS_Z], [sy.x - 14, 9, BUS_Z], [sy.x - 14, 9, sy.z - 34]]} mw={output} max={2700} />
-      <FlowLine points={[[sy.x - 20, 9, sy.z + 34], [sy.x - 20, 9, 60], [76, 9, 60]]} mw={demand} max={2700} />
-      <FlowLine points={[[-150, 7, 40], [-150, 9, 60], [-76, 9, 60]]} mw={Math.abs(battery.powerMw)} max={400} />
-      {[-90, -30, 30, 90].map((x) => <Box key={x} p={[x + 8, 4.5, BUS_Z]} s={[0.6, 9, 0.6]} c="#5c625e" />)}
+      <FlowLine points={BUS_LINE} mw={output} max={2700} />
+      <FlowLine points={DC_LINE} mw={demand} max={2700} />
+      <FlowLine points={BATTERY_LINE} mw={Math.abs(battery.powerMw)} max={400} />
+      <Merged boxes={PYLONS} />
     </group>
   );
 }
+
+const DC_BOXES: BoxSpec[] = [
+  { p: [0, 8, 62], s: [150, 16, 32], c: "#d6d8d2" },
+  ...[-50, -20, 10, 40].map((x): BoxSpec => ({ p: [x, 17, 66], s: [10, 2, 8], c: "#a7aba5" })),
+];
 
 function DataCenter() {
   const demand = useStore((s) => s.plant.demandMw);
@@ -579,12 +618,11 @@ function DataCenter() {
   return (
     <Selectable id="datacenter">
       <group>
-        <Box p={[0, 8, 62]} s={[150, 16, 32]} c="#d6d8d2" rough={0.8} />
+        <Merged boxes={DC_BOXES} cast rough={0.8} />
         <instancedMesh ref={racks} args={[undefined, undefined, count]}>
           <boxGeometry args={[3.6, 0.5, 0.2]} />
           <meshStandardMaterial color="#9fc3e6" emissive="#6fa8dc" emissiveIntensity={glow} toneMapped={false} />
         </instancedMesh>
-        {[-50, -20, 10, 40].map((x) => <Box key={x} p={[x, 17, 66]} s={[10, 2, 8]} c="#a7aba5" />)}
         <Html position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
           <Label id="datacenter" className="tag-dc">
             <strong>AI data center</strong>
@@ -603,7 +641,7 @@ function BatteryYard() {
     <Selectable id="battery">
       <group position={[-150, 0, 26]}>
         {Array.from({ length: 12 }, (_, i) => (
-          <mesh key={i} position={[(i % 4) * 7.5 - 11, 1.6, Math.floor(i / 4) * 5 - 5]} castShadow>
+          <mesh key={i} position={[(i % 4) * 7.5 - 11, 1.6, Math.floor(i / 4) * 5 - 5]}>
             <boxGeometry args={[6, 3.2, 2.6]} />
             <meshStandardMaterial
               color={i / 12 < battery.socPct / 100 ? "#dfe1dc" : "#8d928e"}
@@ -642,7 +680,7 @@ function Truck() {
     <>
       <Line points={ROAD} color={ASPHALT} lineWidth={7} />
       <Selectable id={sh.id}>
-        <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" />
+        <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" cast />
       </Selectable>
       {/* The delivery dock carries the arrival readout so it stays put while the truck moves. */}
       <Html position={[150, 15, 68]} center distanceFactor={110} zIndexRange={[10, 0]}>
@@ -697,10 +735,12 @@ function Scene() {
 export function PlantScene() {
   const controls = useRef<OrbitControlsImpl>(null);
   const select = useStore((s) => s.select);
+  // Start sharp, then drop resolution if the machine can't hold a smooth frame rate.
+  const [dpr, setDpr] = useState(Math.min(window.devicePixelRatio, 1.5));
   return (
     <Canvas
-      shadows
-      dpr={[1, 1.75]}
+      shadows={{ type: THREE.PCFShadowMap }}
+      dpr={dpr}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.9 }}
       camera={{ position: [190, 160, 260], fov: 34, near: 1, far: 1800 }}
       onPointerMissed={(e) => {
@@ -708,6 +748,12 @@ export function PlantScene() {
         if (isTap(e as PointerEvent)) select(null);
       }}
     >
+      <PerformanceMonitor
+        onDecline={() => setDpr((d) => Math.max(0.75, d - 0.25))}
+        onIncline={() => setDpr((d) => Math.min(Math.min(window.devicePixelRatio, 1.5), d + 0.25))}
+        flipflops={3}
+        onFallback={() => setDpr(1)}
+      />
       <Scene />
       <FitToScreen />
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
