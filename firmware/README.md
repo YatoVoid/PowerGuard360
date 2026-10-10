@@ -3,9 +3,13 @@
 Read the sensors on the ESP32 and POST them to the server once a second.
 
 ## Sensors
-- Air quality
-- Barometer (pressure, plus temperature if the chip has it)
-- Light
+The board is GT-08's sensor package. The other seven turbines run on simulated sensors.
+
+| Sensor | Field | What it means for GT-08 |
+|---|---|---|
+| Barometer | `pressure_hpa`, `temperature_c` | Inlet air. Lower pressure or hotter air cuts GT-08's capacity |
+| Air quality | `air_quality_raw` | Emissions near the stack |
+| Light | `light_raw` | Flame detector. Below 300 the unit trips, so covering it is the live demo |
 
 ## Send format
 
