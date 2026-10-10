@@ -71,12 +71,12 @@ h1, h2, h3 { margin: 0; }
 .panel-head h2 { font: 600 15px/1.2 var(--font); color: var(--ink-2); }
 
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; margin: 0; }
-.stats div { border-left: 3px solid var(--rule); padding-left: 8px; }
+.stats div { border-top: 1px solid var(--rule); padding: 6px 6px 0; border-radius: var(--radius-s); }
 .stats dt { font-size: 13px; color: var(--ink-2); }
 .stats dd { margin: 0; font: 600 24px/1.15 var(--font-num); font-variant-numeric: tabular-nums; }
 .stats small { font: 500 13px var(--font); color: var(--ink-2); }
-.stats .is-active { border-left-color: var(--flow); }
-.stats .is-watch { border-left-color: var(--watch); background: #f3e6bf; }
+.stats .is-active dd { color: var(--flow); }
+.stats .is-watch { border-top-color: var(--watch); background: #f3e6bf; }
 
 .kv { display: grid; gap: 4px; margin: 0; }
 .kv div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px dotted var(--rule); }
@@ -94,7 +94,7 @@ h1, h2, h3 { margin: 0; }
 .spark { width: 120px; height: 28px; flex: none; }
 .spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .spark-warn { stroke: var(--watch); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-.forecast { margin: 10px 0 0; padding: 8px 10px; background: #f3e6bf; border-left: 3px solid var(--watch); color: var(--watch-ink); font-weight: 500; }
+.forecast { margin: 10px 0 0; padding: 8px 10px; background: #f3e6bf; border: 1px solid var(--watch); border-radius: var(--radius-s); color: var(--watch-ink); font-weight: 500; }
 .actions { display: flex; gap: 8px; margin-top: 12px; }
 .btn { border: 1px solid var(--ink); background: var(--surface); padding: 7px 14px; border-radius: var(--radius-s); font-weight: 600; cursor: pointer; }
 .btn:hover { background: var(--surface-2); }
@@ -104,12 +104,16 @@ h1, h2, h3 { margin: 0; }
 .note { margin-top: 10px; }
 
 .alarms { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.alarm { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: baseline; padding: 5px 8px; border-left: 3px solid var(--rule); background: var(--surface-2); }
+.alarm { display: grid; grid-template-columns: 12px auto 1fr; gap: 8px; align-items: center; padding: 5px 8px; background: var(--surface-2); border-radius: var(--radius-s); }
+/* priority shapes, so severity reads without relying on color */
+.alarm::before { content: ""; width: 8px; height: 8px; justify-self: center; border-radius: 50%; background: var(--rule); }
+.alarm-watch::before { width: 12px; height: 11px; border-radius: 0; background: var(--watch); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.alarm-trip::before { width: 11px; height: 11px; border-radius: 0; background: var(--trip); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .alarm time { font: 500 13px var(--font-num); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .alarm button { border: 0; background: none; padding: 0; text-align: left; cursor: pointer; }
 .alarm button:hover { text-decoration: underline; }
-.alarm-watch { border-left-color: var(--watch); background: #f3e6bf; }
-.alarm-trip { border-left-color: var(--trip); background: #f2d2cf; }
+.alarm-watch { background: #f3e6bf; }
+.alarm-trip { background: #f2d2cf; }
 
 /* turbine strip */
 .strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; }
@@ -123,8 +127,8 @@ h1, h2, h3 { margin: 0; }
 .unit-mw { font: 600 22px/1.1 var(--font-num); font-variant-numeric: tabular-nums; }
 .unit-mw small { font: 500 12px var(--font); color: var(--ink-2); }
 .unit-meta { font-size: 12px; color: var(--ink-2); text-transform: capitalize; }
-.unit-bar { height: 4px; background: var(--surface-2); margin-top: 5px; }
-.unit-bar span { display: block; height: 100%; background: var(--ink-2); transition: width 0.8s linear; }
+.unit-bar { height: 4px; background: var(--surface-2); margin-top: 5px; overflow: hidden; }
+.unit-bar span { display: block; height: 100%; background: var(--ink-2); transform-origin: left; transition: transform 0.8s linear; }
 .unit-watch { background: #f3e6bf; border-color: var(--watch); }
 .unit-watch .unit-bar span { background: var(--watch); }
 .unit-tripped { background: var(--trip); border-color: var(--trip); color: var(--trip-ink); }

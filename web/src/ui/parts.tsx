@@ -226,7 +226,7 @@ export function TurbineStrip() {
             <span className="unit-id">{tb.id}</span>
             <span className="unit-mw">{tb.status === "running" || tb.status === "watch" ? fmt(tb.outputMw) : "0"}<small> MW</small></span>
             <span className="unit-meta">{tb.status === "running" ? `${fmt(tb.exhaustTempC)} °C` : tb.status}</span>
-            <span className="unit-bar"><span style={{ width: `${(tb.outputMw / tb.ratedMw) * 100}%` }} /></span>
+            <span className="unit-bar"><span style={{ transform: `scaleX(${tb.outputMw / tb.ratedMw})` }} /></span>
           </button>
         </li>
       ))}
