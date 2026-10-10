@@ -58,8 +58,27 @@ describe("plant engine", () => {
     expect(derateFactor(980, 31)).toBeLessThan(derateFactor(1013, 31));
   });
 
-  it("prediction has no estimate for a flat trend", () => {
-    expect(predictOverheat("GT-01", Array(60).fill(590)).minutesToLimit).toBeNull();
+  it("healthy turbines are not flagged once start-up settles", () => {
+    const s = run(createPlant(), 120);
+    const healthy = s.predictions.filter((p) => p.turbineId !== "GT-03" && p.minutesToLimit !== null);
+    expect(healthy).toEqual([]);
+  });
+
+  it("never flags a healthy turbine across ten minutes of load bursts", () => {
+    let s = createPlant();
+    for (let i = 0; i < 600; i++) {
+      s = step(s);
+      const falseAlarm = s.predictions.find((p) => p.turbineId !== "GT-03" && p.minutesToLimit !== null);
+      expect(falseAlarm).toBeUndefined();
+    }
+  });
+
+  it("does not forecast during the start-up settle", () => {
+    expect(predictOverheat("GT-01", [600], Array.from({ length: 40 }, (_, i) => i * 0.5)).minutesToLimit).toBeNull();
+  });
+
+    it("prediction has no estimate for a flat trend", () => {
+    expect(predictOverheat("GT-01", Array(120).fill(590), Array(120).fill(0.4)).minutesToLimit).toBeNull();
   });
 });
 

@@ -159,21 +159,36 @@ export function createPlant(seed = 7): PlantState {
     events: [{ id: 0, t: 0, severity: "info", asset: "GT-08", text: "GT-08 offline for planned maintenance" }],
     history: [],
     tempHistory,
+    excessHistory: {},
     simWear: {},
+    expectedExhaustC: Object.fromEntries(turbines.map((tb) => [tb.id, tb.exhaustTempC])),
   };
 }
 
-// Trend extrapolation over recent exhaust temps. Stand-in until the ML model is trained on real data.
-export function predictOverheat(id: string, temps: number[]): Prediction {
-  const n = temps.length;
-  if (n < 30) return { turbineId: id, issue: "overheat", minutesToLimit: null, risk: 0 };
+// Exhaust temperature a healthy unit settles at for a given load.
+export function healthyExhaustC(load: number) {
+  return 560 + 45 * load;
+}
+
+// Watches how far a unit runs above a healthy unit at the same load ("excess"). Load swings move both
+// together, so only real degradation makes the excess climb. Stand-in until the ML model is trained on real data.
+export function predictOverheat(id: string, temps: number[], excess: number[]): Prediction {
+  const none: Prediction = { turbineId: id, issue: "overheat", minutesToLimit: null, risk: 0 };
+  if (excess.length < 60 || temps.length === 0) return none;
+  const recent = excess.slice(-60);
+  const n = recent.length;
   let sx = 0, sy = 0, sxy = 0, sxx = 0;
-  for (let i = 0; i < n; i++) { sx += i; sy += temps[i]; sxy += i * temps[i]; sxx += i * i; }
+  for (let i = 0; i < n; i++) { sx += i; sy += recent[i]; sxy += i * recent[i]; sxx += i * i; }
   const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-  const last = temps[n - 1];
+  const last = temps[temps.length - 1];
   const headroom = TRIP_TEMP_C - last;
-  const minutesToLimit = slope > 0.005 && headroom > 0 ? headroom / slope / 60 : null;
-  const proximity = Math.min(1, Math.max(0, (last - 600) / (TRIP_TEMP_C - 600)));
+  // Require a real rise, not a tilt in the noise, and only surface what an operator can act on soon.
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const rise = mean(recent.slice(-15)) - mean(recent.slice(0, 15));
+  const runningHot = recent[n - 1] > 4;
+  const minutes = runningHot && slope > 0.03 && rise > 2.5 && headroom > 0 ? headroom / slope / 60 : null;
+  const minutesToLimit = minutes !== null && minutes <= 20 ? minutes : null;
+  const proximity = Math.min(1, Math.max(0, (last - 610) / (TRIP_TEMP_C - 610)));
   const urgency = minutesToLimit === null ? 0 : Math.min(1, 10 / Math.max(minutesToLimit, 0.5));
   return { turbineId: id, issue: "overheat", minutesToLimit, risk: Math.round(100 * Math.max(proximity * 0.6, urgency)) / 100 };
 }
@@ -214,6 +229,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
   const simWear = { ...prev.simWear };
+  const expected = { ...prev.expectedExhaustC };
 
   for (const id of inputs.tripRequests ?? []) {
     const tb = turbines.find((x) => x.id === id);
@@ -251,8 +267,10 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
     // GT-03 carries a slowly failing combustion liner, which is why its spare is on the truck.
     if (tb.id === "GT-03" && running) simWear[tb.id] = (simWear[tb.id] ?? 0) + 0.11;
-    const baseTemp = running ? 560 + 45 * load + (simWear[tb.id] ?? 0) : 120;
-    tb.exhaustTempC += (baseTemp - tb.exhaustTempC) * 0.08 + (rnd() - 0.5) * 1.2;
+    const healthy = running ? healthyExhaustC(load) : 120;
+    tb.exhaustTempC += (healthy + (simWear[tb.id] ?? 0) - tb.exhaustTempC) * 0.08 + (rnd() - 0.5) * 1.2;
+    // The healthy reference follows the same thermal lag, so bursts in load don't show up as excess.
+    expected[tb.id] = (expected[tb.id] ?? tb.exhaustTempC) + (healthy - (expected[tb.id] ?? tb.exhaustTempC)) * 0.08;
     tb.vibrationMmS = running ? Math.max(0.5, 2.2 + load * 1.1 + (tb.exhaustTempC > WATCH_TEMP_C ? 1.6 : 0) + (rnd() - 0.5) * 0.3) : 0.1;
     tb.rpm = running ? 3600 + (rnd() - 0.5) * 4 : Math.max(0, tb.rpm * 0.9);
     tb.efficiencyPct = running ? 30 + 9.5 * Math.min(load, 1) - (tb.exhaustTempC > WATCH_TEMP_C ? 1.2 : 0) : 0;
@@ -317,13 +335,19 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   });
 
   const tempHistory: Record<string, number[]> = {};
+  const excessHistory: Record<string, number[]> = {};
   for (const tb of turbines) {
     const h = prev.tempHistory[tb.id] ?? [];
     tempHistory[tb.id] = [...h.slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC];
+    const running = tb.status === "running" || tb.status === "watch";
+    // A stopped unit has no meaningful excess; restart its history so cool-down doesn't read as a trend.
+    excessHistory[tb.id] = running
+      ? [...(prev.excessHistory[tb.id] ?? []).slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC - expected[tb.id]]
+      : [];
   }
   const predictions = turbines
     .filter((x) => x.status === "running" || x.status === "watch")
-    .map((x) => predictOverheat(x.id, tempHistory[x.id]))
+    .map((x) => predictOverheat(x.id, tempHistory[x.id], excessHistory[x.id]))
     .sort((a, b) => b.risk - a.risk);
 
   const point: HistoryPoint = { t, demandMw, outputMw, batteryMw, gridMw };
@@ -343,7 +367,9 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],
     tempHistory,
+    excessHistory,
     simWear,
+    expectedExhaustC: expected,
   };
 }
 

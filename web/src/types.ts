@@ -93,6 +93,8 @@ export interface PlantState {
   history: HistoryPoint[];
   tempHistory: Record<string, number[]>;
   simWear: Record<string, number>;
+  excessHistory: Record<string, number[]>;
+  expectedExhaustC: Record<string, number>;
 }
 
 export interface SensorReading {
