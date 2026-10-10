@@ -1,6 +1,6 @@
 # Project story (egetwasm)
 
-The story of how we built Always On, for the Devpost write-up, the pitch, and the DEV writing challenge after the event.
+The story of how we built Power Guard 360, for the Devpost write-up, the pitch, and the DEV writing challenge after the event.
 
 ## Write
 - `LOG.md`: a running log with timestamps. Decisions, what broke, what we changed our minds about, who solved what.

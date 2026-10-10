@@ -24,7 +24,7 @@ function TopBar() {
       <div className="brand">
         <svg viewBox="0 0 32 32" aria-hidden className="mark"><path d="M9 23V12l7-4 7 4v11" /><path d="M17 12l-3 6h4l-3 6" className="bolt" /></svg>
         <div>
-          <h1>Always On</h1>
+          <h1>Power Guard 360</h1>
           <p>Gas-turbine plant for an AI data center, West Texas</p>
         </div>
       </div>

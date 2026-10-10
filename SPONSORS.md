@@ -56,7 +56,7 @@ Shape that fits most tracks: ESP32 sensors -> Tiger Data (time series) -> web da
 A physical demo at the judging table is strong for Design and Completion.
 
 ## Decision
-- Project name: Always On
+- Project name: Power Guard 360
 - Sponsor track: Chevron (pending the announced challenge)
 - Plus: General, Gemini, ElevenLabs, Tiger Data, GoDaddy domain
 - No hardware available. Software only.

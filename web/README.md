@@ -1,4 +1,4 @@
-# Always On web app
+# Power Guard 360 web app
 
 Digital twin and dashboard for a gas-turbine plant powering an AI data center.
 

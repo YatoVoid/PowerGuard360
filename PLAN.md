@@ -1,4 +1,4 @@
-# Always On: build plan
+# Power Guard 360: build plan
 
 Selling point: a live feed. Real sensors and a real moving vehicle drive a 3D model of a gas-turbine plant that powers an AI data center.
 
