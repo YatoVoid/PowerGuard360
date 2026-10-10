@@ -795,6 +795,8 @@ function Crew({ shipmentId }: { shipmentId: string }) {
     <>
       {remaining && <Line points={remaining} color={VEST} lineWidth={1.5} dashed dashSize={2} gapSize={2} />}
       <group ref={group} position={[d.pos[0], 0.2, d.pos[1]]}>
+        {/* Drawn larger than life so a crew is readable from the default camera. */}
+        <group scale={1.8}>
         <Selectable id={d.shipmentId}>
           {offsets.map((o, i) => (walking ? <Worker key={i} offset={o} phase={i * 1.3} /> : (
             <group key={i} position={[o[0], 0, o[1]]}>
@@ -804,7 +806,8 @@ function Crew({ shipmentId }: { shipmentId: string }) {
           )))}
           {d.status !== "delivered" && <Box p={[0.2, 1.6, 0.4]} s={[1.6, 1, 1.2]} c="#8a6a3c" />}
         </Selectable>
-        <Html position={[0, 6, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
+        </group>
+        <Html position={[0, 8, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
           <Label id={d.shipmentId} className="tag-crew">
             <strong>{d.crew}</strong>
             <span>

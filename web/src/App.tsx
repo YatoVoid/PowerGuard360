@@ -86,6 +86,14 @@ function DashboardView() {
 export default function App() {
   const view = useStore((s) => s.view);
   useEffect(() => startClock(), []);
+  useEffect(() => {
+    const onHash = () => {
+      const h = location.hash.replace("#", "");
+      useStore.getState().setView(h === "dashboard" || h === "map" ? h : "twin");
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   return (
     <div className="app">
       <TopBar />

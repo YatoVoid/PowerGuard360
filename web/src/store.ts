@@ -40,13 +40,21 @@ interface Store {
 
 let watchId: number | null = null;
 
+// ?ff=360 starts the plant six minutes in, for rehearsing the later parts of the demo.
+function initialPlant() {
+  let plant = createPlant();
+  const ff = Math.min(1800, Math.max(0, Number(new URLSearchParams(location.search).get("ff")) || 0));
+  for (let i = 0; i < ff; i++) plant = step(plant);
+  return plant;
+}
+
 function viewFromHash(): View {
   const h = location.hash.replace("#", "");
   return h === "dashboard" || h === "map" ? h : "twin";
 }
 
 export const useStore = create<Store>((set, get) => ({
-  plant: createPlant(),
+  plant: initialPlant(),
   view: viewFromHash(),
   selected: null,
   paused: false,
