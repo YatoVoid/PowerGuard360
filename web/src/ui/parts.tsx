@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
 import type { HistoryPoint, PlantEvent, Source, Turbine } from "../types";
@@ -33,8 +34,19 @@ const SERIES: { key: keyof HistoryPoint; label: string; cls: string }[] = [
   { key: "gridMw", label: "Grid import", cls: "s-grid" },
 ];
 
-export function BalanceChart({ history, height = 180 }: { history: HistoryPoint[]; height?: number }) {
-  const w = 600, h = height, pad = { l: 44, r: 8, t: 8, b: 20 };
+// Drawn at the container's real pixel size so axis text stays the same size on every screen.
+export function BalanceChart({ history }: { history: HistoryPoint[] }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 600, h: 220 });
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setSize({ w: Math.max(200, e.contentRect.width), h: Math.max(120, e.contentRect.height) }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const { w, h } = size;
+  const pad = { l: 46, r: 10, t: 10, b: 22 };
   const max = 2700, min = 0;
   const n = Math.max(history.length, 2);
   const x = (i: number) => pad.l + (i / (n - 1)) * (w - pad.l - pad.r);
@@ -42,26 +54,28 @@ export function BalanceChart({ history, height = 180 }: { history: HistoryPoint[
   const ticks = [0, 900, 1800, 2700];
   return (
     <figure className="chart">
-      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Power balance, last five minutes">
-        {ticks.map((v) => (
-          <g key={v}>
-            <line x1={pad.l} x2={w - pad.r} y1={y(v)} y2={y(v)} className="grid" />
-            <text x={pad.l - 6} y={y(v) + 4} className="axis" textAnchor="end">{fmt(v)}</text>
-          </g>
-        ))}
-        {SERIES.map((s) => (
-          <polyline
-            key={s.key}
-            className={`line ${s.cls}`}
-            points={history.map((p, i) => `${x(i)},${y(Math.max(0, p[s.key] as number))}`).join(" ")}
-          />
-        ))}
-        <text x={w - pad.r} y={h - 4} className="axis" textAnchor="end">now</text>
-        <text x={pad.l} y={h - 4} className="axis">5 min ago</text>
-      </svg>
+      <div ref={box} className="chart-box">
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Power balance, last five minutes">
+          {ticks.map((v) => (
+            <g key={v}>
+              <line x1={pad.l} x2={w - pad.r} y1={y(v)} y2={y(v)} className="grid" />
+              <text x={pad.l - 8} y={y(v) + 4} className="axis" textAnchor="end">{fmt(v)}</text>
+            </g>
+          ))}
+          {SERIES.map((s) => (
+            <polyline
+              key={s.key}
+              className={`line ${s.cls}`}
+              points={history.map((p, i) => `${x(i)},${y(Math.max(0, p[s.key] as number))}`).join(" ")}
+            />
+          ))}
+          <text x={w - pad.r} y={h - 4} className="axis" textAnchor="end">now</text>
+          <text x={pad.l} y={h - 4} className="axis">5 min ago</text>
+        </svg>
+      </div>
       <figcaption className="legend">
         {SERIES.map((s) => <span key={s.key} className={`key ${s.cls}`}>{s.label}</span>)}
-        <span className="unit">MW</span>
+        <span className="legend-unit">MW</span>
       </figcaption>
     </figure>
   );
@@ -138,7 +152,16 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
 export function AssetDetail() {
   const selected = useStore((s) => s.selected);
   const plant = useStore((s) => s.plant);
-  if (!selected) return <p className="empty">Select a turbine, the battery, the data center or the truck to see its readings.</p>;
+  if (!selected) {
+    const riskiest = plant.predictions[0]?.turbineId;
+    const tb = plant.turbines.find((x) => x.id === riskiest) ?? plant.turbines[0];
+    return (
+      <>
+        <p className="hint">Showing the unit most at risk. Click any unit to switch.</p>
+        <TurbineDetail tb={tb} />
+      </>
+    );
+  }
   const tb = plant.turbines.find((x) => x.id === selected);
   if (tb) return <TurbineDetail tb={tb} />;
   if (selected === "battery") {

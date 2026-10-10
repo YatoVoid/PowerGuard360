@@ -52,7 +52,7 @@ function TwinView() {
         <Suspense fallback={<div className="scene-loading">Loading plant model</div>}>
           <PlantScene />
         </Suspense>
-        <p className="scene-hint">Drag to orbit, scroll to zoom, click any unit</p>
+        <p className="scene-hint"><span className="hint-mouse">Drag to orbit, scroll to zoom, click any unit</span><span className="hint-touch">Drag to orbit, pinch to zoom, tap any unit</span></p>
       </div>
       <aside className="rail">
         <Panel title="Power balance"><BalanceStats /></Panel>

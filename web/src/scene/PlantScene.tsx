@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, Line, OrbitControls, Sky } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -51,6 +51,19 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
     c.update();
     if (c.target.distanceTo(goal.current) < 0.1) { goal.current = null; camGoal.current = null; }
   });
+  return null;
+}
+
+// Portrait screens see a narrower slice of the site, so pull the starting camera back to keep the whole plant in view.
+function FitToScreen() {
+  const { camera, size } = useThree();
+  useEffect(() => {
+    const aspect = size.width / size.height;
+    const back = aspect < 1 ? 2.1 : aspect < 1.4 ? 1.35 : 1;
+    camera.position.set(190 * back, 160 * back, 260 * back);
+    camera.lookAt(0, 0, -10);
+    // Only on first layout; after that the user owns the camera.
+  }, []);
   return null;
 }
 
@@ -494,6 +507,7 @@ export function PlantScene() {
       onPointerMissed={() => select(null)}
     >
       <Scene />
+      <FitToScreen />
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
       <CameraRig controls={controls} />
     </Canvas>
