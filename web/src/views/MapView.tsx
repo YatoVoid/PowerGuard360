@@ -71,8 +71,8 @@ function ShipmentMap() {
     m.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     m.on("load", () => {
       m.addSource("geofence", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circle(SITE_LON_LAT, GEOFENCE_KM)] } } });
-      m.addLayer({ id: "geofence-fill", type: "fill", source: "geofence", paint: { "fill-color": "#2f5d8a", "fill-opacity": 0.08 } });
-      m.addLayer({ id: "geofence-line", type: "line", source: "geofence", paint: { "line-color": "#2f5d8a", "line-width": 1.5, "line-dasharray": [2, 2] } });
+      m.addLayer({ id: "geofence-fill", type: "fill", source: "geofence", paint: { "fill-color": "#2f6fde", "fill-opacity": 0.08 } });
+      m.addLayer({ id: "geofence-line", type: "line", source: "geofence", paint: { "line-color": "#2f6fde", "line-width": 1.5, "line-dasharray": [2, 2] } });
       m.addSource("ahead", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       m.addSource("driven", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       m.addLayer({
@@ -81,7 +81,7 @@ function ShipmentMap() {
       });
       m.addLayer({
         id: "driven", type: "line", source: "driven", layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#2f5d8a", "line-width": ["case", ["get", "selected"], 5, 3], "line-opacity": ["case", ["get", "selected"], 1, 0.5] },
+        paint: { "line-color": "#2f6fde", "line-width": ["case", ["get", "selected"], 5, 3], "line-opacity": ["case", ["get", "selected"], 1, 0.5] },
       });
       ready.current = true;
       fitAll(m, 0);

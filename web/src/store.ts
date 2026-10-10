@@ -3,6 +3,7 @@ import { createPlant, haversineKm, step } from "./sim/engine";
 import type { PlantState, SensorReading } from "./types";
 
 export type View = "twin" | "dashboard" | "map";
+export type CameraPreset = "overview" | "top" | "turbines" | "dock";
 
 // Walking 1 m moves the trailer 100 m along its route, so a phone carried around a room shows real movement.
 export const PHONE_GPS_SCALE = 100;
@@ -18,6 +19,10 @@ interface Store {
   plant: PlantState;
   view: View;
   selected: string | null;
+  showLabels: boolean;
+  cameraPreset: { name: CameraPreset; n: number } | null;
+  setShowLabels: (v: boolean) => void;
+  goTo: (name: CameraPreset) => void;
   paused: boolean;
   pendingTrips: string[];
   pendingResets: string[];
@@ -57,6 +62,10 @@ export const useStore = create<Store>((set, get) => ({
   plant: initialPlant(),
   view: viewFromHash(),
   selected: null,
+  showLabels: true,
+  cameraPreset: null,
+  setShowLabels: (showLabels) => set({ showLabels }),
+  goTo: (name) => set((s) => ({ cameraPreset: { name, n: (s.cameraPreset?.n ?? 0) + 1 } })),
   paused: false,
   pendingTrips: [],
   pendingResets: [],

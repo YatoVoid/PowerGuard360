@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Line, OrbitControls, Sky } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { useStore } from "../store";
+import { useStore, type CameraPreset } from "../store";
 import { DOCK_BAYS, UNIT_X } from "../sim/site";
 import { LIVE_SENSOR_UNIT } from "../sim/engine";
 import type { Turbine } from "../types";
@@ -21,10 +22,10 @@ const STATUS_COLOR: Record<Turbine["status"], string> = {
   tripped: "#c8261e",
   offline: "#5d6360",
 };
-const STEEL = "#9aa19c";
-const CLAD = "#c9ccc6";
-const GRAVEL = "#b3ada0";
-const ASPHALT = "#4d4b47";
+const STEEL = "#b4bac1";
+const CLAD = "#eceef1";
+const GRAVEL = "#e4e7ea";
+const ASPHALT = "#a3a9b0";
 const FLOW = "#2f5d8a";
 const GAS = "#c9a227";
 const PAD = { x0: -190, x1: 190, z0: -118, z1: 96 };
@@ -43,6 +44,13 @@ const CAMERA_OFFSET: Record<string, V3> = {
   dock: [50, 70, 110],
 };
 
+const PRESET_VIEWS: Record<CameraPreset, { target: V3; camera: V3 }> = {
+  overview: { target: [0, 0, -10], camera: [190, 160, 260] },
+  turbines: { target: [0, 10, -40], camera: [30, 95, 120] },
+  dock: { target: [150, 0, 80], camera: [215, 75, 175] },
+  top: { target: [0, 0, -5], camera: [0.1, 470, 1] },
+};
+
 // Focus easing adapted from WareTwin (MIT, github.com/WayneChou-bot/WareTwin).
 function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl | null> }) {
   const selected = useStore((s) => s.selected);
@@ -56,6 +64,13 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
     goal.current = new THREE.Vector3(p[0], 6, p[2]);
     camGoal.current = new THREE.Vector3(p[0] + off[0], off[1], p[2] + off[2]);
   }, [selected]);
+  const preset = useStore((s) => s.cameraPreset);
+  useEffect(() => {
+    if (!preset) return;
+    const p = PRESET_VIEWS[preset.name];
+    goal.current = new THREE.Vector3(...p.target);
+    camGoal.current = new THREE.Vector3(...p.camera);
+  }, [preset]);
   useFrame(({ camera }, dt) => {
     const c = controls.current;
     if (!c || !goal.current) return;
@@ -63,7 +78,8 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
     c.target.lerp(goal.current, k);
     if (camGoal.current) camera.position.lerp(camGoal.current, k);
     c.update();
-    if (c.target.distanceTo(goal.current) < 0.1) { goal.current = null; camGoal.current = null; }
+    const camDone = !camGoal.current || camera.position.distanceTo(camGoal.current) < 0.5;
+    if (c.target.distanceTo(goal.current) < 0.1 && camDone) { goal.current = null; camGoal.current = null; }
   });
   return null;
 }
@@ -166,7 +182,7 @@ function Site() {
     <>
       <mesh rotation-x={-Math.PI / 2} receiveShadow>
         <planeGeometry args={[1100, 900]} />
-        <meshStandardMaterial color="#b98e5e" roughness={1} />
+        <meshStandardMaterial color="#d3d7db" roughness={1} />
       </mesh>
       <mesh rotation-x={-Math.PI / 2} position={[cx, 0.05, cz]} receiveShadow>
         <planeGeometry args={[w + 22, d + 22]} />
@@ -246,7 +262,7 @@ const TURBINE_BOXES: BoxSpec[] = [
   { p: [0, 33, -9], s: [5.6, 0.5, 5.6], c: "#5c625e" },
   { p: [8, 2.6, -74], s: [5, 5.2, 4.5], c: "#6f7672" },
 ];
-const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#7d837f" }];
+const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#9aa1a9" }];
 
 function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; selected: boolean }) {
   const x = UNIT_X(index);
@@ -531,7 +547,7 @@ function Switchyard() {
     <group>
       <mesh rotation-x={-Math.PI / 2} position={[x, 0.15, z]} receiveShadow>
         <planeGeometry args={[52, 68]} />
-        <meshStandardMaterial color="#c4c0b6" roughness={1} />
+        <meshStandardMaterial color="#d8dbdf" roughness={1} />
       </mesh>
       <Line points={fence} color="#6b6862" lineWidth={1} />
       <Merged boxes={SWITCHYARD_SPECS.boxes} beams={SWITCHYARD_SPECS.beams} cast />
@@ -606,7 +622,7 @@ function PowerFlow() {
 }
 
 const DC_BOXES: BoxSpec[] = [
-  { p: [0, 8, 62], s: [150, 16, 32], c: "#d6d8d2" },
+  { p: [0, 8, 62], s: [150, 16, 32], c: "#f1f2f4" },
   ...[-50, -20, 10, 40].map((x): BoxSpec => ({ p: [x, 17, 66], s: [10, 2, 8], c: "#a7aba5" })),
 ];
 
@@ -726,7 +742,7 @@ function Dock() {
       <Line points={ROAD} color={ASPHALT} lineWidth={7} />
       <mesh rotation-x={-Math.PI / 2} position={[150, 0.12, 88]} receiveShadow>
         <planeGeometry args={[52, 22]} />
-        <meshStandardMaterial color="#9d988e" roughness={1} />
+        <meshStandardMaterial color="#c9cdd2" roughness={1} />
       </mesh>
       <Merged boxes={DOCK_BOXES} cast />
       <Html position={[150, 15, 68]} center distanceFactor={110} zIndexRange={[10, 0]}>
@@ -827,16 +843,30 @@ function Crews() {
   return <>{ids ? ids.split(",").map((id) => <Crew key={id} shipmentId={id} />) : null}</>;
 }
 
+// Neutral engineering backdrop: flat grey, soft room reflections, no sky.
+function Studio() {
+  const { scene, gl } = useThree();
+  useEffect(() => {
+    scene.background = new THREE.Color("#dde1e5");
+    scene.fog = new THREE.Fog("#dde1e5", 420, 900);
+    const pmrem = new THREE.PMREMGenerator(gl);
+    const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = env;
+    scene.environmentIntensity = 0.45;
+    return () => { scene.environment = null; scene.fog = null; env.dispose(); pmrem.dispose(); };
+  }, [scene, gl]);
+  return null;
+}
+
 function Scene() {
   const turbines = useStore((s) => s.plant.turbines);
   const selected = useStore((s) => s.selected);
   return (
     <>
-      <Sky sunPosition={[-1, 0.06, -0.35]} turbidity={9} rayleigh={2.4} mieCoefficient={0.006} mieDirectionalG={0.85} />
-      <fog attach="fog" args={["#d9b48f", 320, 760]} />
-      <hemisphereLight args={["#c7d3e8", "#8a6a48", 0.9]} />
+      <Studio />
+      <hemisphereLight args={["#ffffff", "#c4c9cf", 0.7]} />
       <directionalLight
-        position={[-200, 80, -110]} intensity={2.2} color="#ffd2a1" castShadow
+        position={[-160, 220, -90]} intensity={1.6} color="#ffffff" castShadow
         shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004}
         shadow-camera-left={-240} shadow-camera-right={240} shadow-camera-top={170} shadow-camera-bottom={-170} shadow-camera-far={600}
       />

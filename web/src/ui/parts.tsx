@@ -15,11 +15,12 @@ export function SourceTag({ source }: { source: Source }) {
   return <span className={`src src-${source}`}>{source === "live" ? "Live sensor" : "Simulated"}</span>;
 }
 
-export function Panel({ title, aside, children, className = "" }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function Panel({ title, meta, aside, children, className = "" }: { title: string; meta?: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <section className={`panel ${className}`}>
       <header className="panel-head">
         <h2>{title}</h2>
+        {meta && <span className="panel-meta">{meta}</span>}
         {aside}
       </header>
       {children}
@@ -109,6 +110,32 @@ export function BalanceStats() {
       <div><dt>Reserve</dt><dd>{fmt(p.reserveMw)}<small> MW</small></dd></div>
       <div><dt>Battery charge</dt><dd>{fmt(p.battery.socPct)}<small> %</small></dd></div>
     </dl>
+  );
+}
+
+export function UnitLoadBars() {
+  const turbines = useStore((s) => s.plant.turbines);
+  const select = useStore((s) => s.select);
+  return (
+    <ul className="loadbars">
+      {turbines.map((tb) => {
+        const pct = (tb.outputMw / tb.ratedMw) * 100;
+        const cap = (tb.capacityMw / tb.ratedMw) * 100;
+        return (
+          <li key={tb.id}>
+            <button type="button" onClick={() => select(tb.id)} className={`loadbar loadbar-${tb.status}`}>
+              <span className="loadbar-id">{tb.id}</span>
+              <span className="loadbar-track" aria-hidden>
+                <span className="loadbar-fill" style={{ transform: `scaleX(${pct / 100})` }} />
+                <span className="loadbar-cap" style={{ left: `${cap}%` }} title="Available capacity at current inlet air" />
+              </span>
+              <span className="loadbar-val">{fmt(pct, 1)}%</span>
+            </button>
+          </li>
+        );
+      })}
+      <li className="loadbar-legend" aria-hidden><span className="cap-key" />Available capacity at current inlet air</li>
+    </ul>
   );
 }
 
