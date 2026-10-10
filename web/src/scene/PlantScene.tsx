@@ -6,6 +6,12 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore } from "../store";
 import type { Turbine } from "../types";
 
+// Layout follows a combined-cycle plant: gas turbine -> heat recovery steam generator (HRSG) with the
+// stack on top -> steam turbine hall -> air-cooled condenser, which West Texas plants use instead of
+// water cooling towers.
+
+type V3 = [number, number, number];
+
 const UNIT_X = (i: number) => -84 + i * 24;
 const STATUS_COLOR: Record<Turbine["status"], string> = {
   running: "#8f9690",
@@ -14,10 +20,16 @@ const STATUS_COLOR: Record<Turbine["status"], string> = {
   offline: "#5d6360",
 };
 const STEEL = "#9aa19c";
-const CONCRETE = "#b7b1a4";
+const CLAD = "#c9ccc6";
+const GRAVEL = "#b3ada0";
+const ASPHALT = "#4d4b47";
 const FLOW = "#2f5d8a";
-const ROAD: [number, number, number][] = [[240, 0.2, 96], [180, 0.2, 92], [150, 0.2, 84], [126, 0.2, 80]];
+const GAS = "#c9a227";
+const PAD = { x0: -190, x1: 190, z0: -118, z1: 96 };
+const ROAD: V3[] = [[270, 0.3, 102], [210, 0.3, 102], [180, 0.3, 90], [140, 0.3, 82]];
 const ROAD_KM = 3;
+const BUS_Z = -86;
+const SWITCHYARD = { x: 152, z: -45 };
 
 // Focus easing adapted from WareTwin (MIT, github.com/WayneChou-bot/WareTwin).
 function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl | null> }) {
@@ -27,8 +39,8 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
   useEffect(() => {
     const p = assetPosition(selected);
     if (!p) return;
-    goal.current = new THREE.Vector3(p[0], 4, p[2]);
-    camGoal.current = new THREE.Vector3(p[0] + 34, 30, p[2] + 52);
+    goal.current = new THREE.Vector3(p[0], 6, p[2]);
+    camGoal.current = new THREE.Vector3(p[0] + 40, 42, p[2] + 64);
   }, [selected]);
   useFrame(({ camera }, dt) => {
     const c = controls.current;
@@ -42,28 +54,60 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
   return null;
 }
 
-function assetPosition(id: string | null): [number, number, number] | null {
+function assetPosition(id: string | null): V3 | null {
   if (!id) return null;
-  if (id.startsWith("GT-")) return [UNIT_X(Number(id.slice(3)) - 1), 0, -30];
-  if (id === "datacenter") return [0, 0, 55];
-  if (id === "battery") return [-132, 0, 14];
-  if (id === "substation") return [0, 0, 0];
-  if (id === "TRL-204") return [126, 0, 80];
+  if (id.startsWith("GT-")) return [UNIT_X(Number(id.slice(3)) - 1), 0, -42];
+  if (id === "datacenter") return [0, 0, 62];
+  if (id === "battery") return [-150, 0, 32];
+  if (id === "TRL-204") return [140, 0, 82];
   return null;
 }
 
-function Ground() {
+function Box({ p, s, c, cast = true, rough = 0.75, metal = 0.1 }: { p: V3; s: V3; c: string; cast?: boolean; rough?: number; metal?: number }) {
+  return (
+    <mesh position={p} castShadow={cast} receiveShadow>
+      <boxGeometry args={s} />
+      <meshStandardMaterial color={c} roughness={rough} metalness={metal} />
+    </mesh>
+  );
+}
+
+function Site() {
+  const w = PAD.x1 - PAD.x0, d = PAD.z1 - PAD.z0;
+  const cx = (PAD.x0 + PAD.x1) / 2, cz = (PAD.z0 + PAD.z1) / 2;
+  const fence: V3[] = [
+    [PAD.x0 - 12, 1.6, PAD.z0 - 12], [PAD.x1 + 12, 1.6, PAD.z0 - 12], [PAD.x1 + 12, 1.6, PAD.z1 + 12],
+    [PAD.x0 - 12, 1.6, PAD.z1 + 12], [PAD.x0 - 12, 1.6, PAD.z0 - 12],
+  ];
   return (
     <>
-      <mesh rotation-x={-Math.PI / 2} receiveShadow position={[0, 0, 0]}>
-        <planeGeometry args={[900, 700]} />
+      <mesh rotation-x={-Math.PI / 2} receiveShadow>
+        <planeGeometry args={[1100, 900]} />
         <meshStandardMaterial color="#b98e5e" roughness={1} />
       </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[0, 0.05, 10]} receiveShadow>
-        <planeGeometry args={[310, 150]} />
-        <meshStandardMaterial color={CONCRETE} roughness={0.95} />
+      <mesh rotation-x={-Math.PI / 2} position={[cx, 0.05, cz]} receiveShadow>
+        <planeGeometry args={[w + 22, d + 22]} />
+        <meshStandardMaterial color={ASPHALT} roughness={0.95} />
       </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[cx, 0.1, cz]} receiveShadow>
+        <planeGeometry args={[w, d]} />
+        <meshStandardMaterial color={GRAVEL} roughness={1} />
+      </mesh>
+      <Line points={fence} color="#6b6862" lineWidth={1.2} />
     </>
+  );
+}
+
+function BeaconLight({ position }: { position: V3 }) {
+  const mat = useRef<THREE.MeshBasicMaterial>(null);
+  useFrame(({ clock }) => {
+    if (mat.current) mat.current.color.setRGB(clock.elapsedTime % 2 < 0.25 ? 1 : 0.25, 0.05, 0.03);
+  });
+  return (
+    <mesh position={position}>
+      <sphereGeometry args={[0.55, 8, 8]} />
+      <meshBasicMaterial ref={mat} toneMapped={false} />
+    </mesh>
   );
 }
 
@@ -80,19 +124,6 @@ function Selectable({ id, children }: { id: string; children: React.ReactNode })
   );
 }
 
-function BeaconLight({ position }: { position: [number, number, number] }) {
-  const mat = useRef<THREE.MeshBasicMaterial>(null);
-  useFrame(({ clock }) => {
-    if (mat.current) mat.current.color.setRGB(clock.elapsedTime % 2 < 0.25 ? 1 : 0.25, 0.05, 0.03);
-  });
-  return (
-    <mesh position={position}>
-      <sphereGeometry args={[0.45, 8, 8]} />
-      <meshBasicMaterial ref={mat} toneMapped={false} />
-    </mesh>
-  );
-}
-
 function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; selected: boolean }) {
   const x = UNIT_X(index);
   const color = STATUS_COLOR[tb.status];
@@ -100,59 +131,59 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   const plume = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
     if (!plume.current) return;
-    const on = tb.status === "running" || tb.status === "watch";
-    plume.current.visible = on;
+    plume.current.visible = tb.status === "running" || tb.status === "watch";
     plume.current.children.forEach((m, i) => {
-      const k = (clock.elapsedTime * 0.35 + i / 3) % 1;
-      m.position.y = 26 + k * 14;
-      m.scale.setScalar(1 + k * 2.5);
-      ((m as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = 0.18 * (1 - k) * (tb.outputMw / tb.ratedMw);
+      const k = (clock.elapsedTime * 0.3 + i / 3) % 1;
+      m.position.y = 38 + k * 16;
+      m.scale.setScalar(1 + k * 2.6);
+      ((m as THREE.Mesh).material as THREE.MeshStandardMaterial).opacity = 0.2 * (1 - k) * (tb.outputMw / tb.ratedMw);
     });
   });
   return (
     <Selectable id={tb.id}>
-      <group position={[x, 0, -30]}>
-        {/* inlet filter house */}
-        <mesh position={[0, 6, -13]} castShadow receiveShadow>
-          <boxGeometry args={[9, 12, 6]} />
-          <meshStandardMaterial color={STEEL} roughness={0.7} metalness={0.2} />
+      <group position={[x, 0, 0]}>
+        {/* generator, cold end */}
+        <Box p={[0, 3, -72]} s={[7, 6, 9]} c="#8b918d" />
+        {/* elevated inlet filter house on legs */}
+        <Box p={[0, 13, -60]} s={[10, 9, 8]} c={STEEL} />
+        <Box p={[-4, 4.3, -63]} s={[0.6, 8.6, 0.6]} c="#5c625e" />
+        <Box p={[4, 4.3, -63]} s={[0.6, 8.6, 0.6]} c="#5c625e" />
+        <Box p={[0, 7, -56]} s={[4, 4, 3]} c={STEEL} />
+        {/* gas turbine enclosure with status band */}
+        <Box p={[0, 4, -48]} s={[8, 8, 14]} c="#c3c6bf" rough={0.6} metal={0.15} />
+        <mesh position={[0, 8.15, -48]}>
+          <boxGeometry args={[8.1, 0.35, 14.1]} />
+          <meshStandardMaterial color={color} emissive={alarm ? color : "#000"} emissiveIntensity={alarm ? 1.5 : 0} toneMapped={!alarm} />
         </mesh>
-        {/* turbine enclosure */}
-        <mesh position={[0, 4, 0]} castShadow receiveShadow>
-          <boxGeometry args={[8, 8, 18]} />
-          <meshStandardMaterial color="#c3c6bf" roughness={0.6} metalness={0.15} />
-        </mesh>
-        {/* status band: grey when normal, colored only when abnormal */}
-        <mesh position={[0, 8.15, 0]}>
-          <boxGeometry args={[8.1, 0.3, 18.1]} />
-          <meshStandardMaterial color={color} emissive={alarm ? color : "#000"} emissiveIntensity={alarm ? 1.4 : 0} toneMapped={!alarm} />
-        </mesh>
-        {/* exhaust stack */}
-        <mesh position={[0, 12, 12]} castShadow>
-          <cylinderGeometry args={[1.7, 2, 24, 16]} />
+        {/* exhaust diffuser into the HRSG */}
+        <Box p={[0, 6, -38]} s={[7, 8, 6]} c="#9da39e" />
+        {/* heat recovery steam generator */}
+        <Box p={[0, 10, -23]} s={[11, 20, 24]} c={CLAD} rough={0.7} />
+        <Box p={[0, 20.3, -23]} s={[11.4, 0.6, 24.4]} c="#a9aea8" />
+        {/* stack on the HRSG outlet */}
+        <mesh position={[0, 18, -9]} castShadow>
+          <cylinderGeometry args={[2.2, 2.5, 36, 18]} />
           <meshStandardMaterial color="#7d837f" roughness={0.5} metalness={0.4} />
         </mesh>
-        <BeaconLight position={[0, 24.6, 12]} />
-        <group ref={plume} position={[0, 0, 12]}>
+        <Box p={[0, 33, -9]} s={[5.6, 0.5, 5.6]} c="#5c625e" cast={false} />
+        <BeaconLight position={[0, 36.6, -9]} />
+        <group ref={plume} position={[0, 0, -9]}>
           {[0, 1, 2].map((i) => (
             <mesh key={i}>
-              <sphereGeometry args={[1.8, 10, 10]} />
-              <meshStandardMaterial color="#e9e4dc" transparent opacity={0.15} depthWrite={false} />
+              <sphereGeometry args={[2.2, 10, 10]} />
+              <meshStandardMaterial color="#ece7df" transparent opacity={0.15} depthWrite={false} />
             </mesh>
           ))}
         </group>
-        {/* step-up transformer */}
-        <mesh position={[0, 2.2, 20]} castShadow>
-          <boxGeometry args={[5, 4.4, 4]} />
-          <meshStandardMaterial color="#6f7672" roughness={0.6} />
-        </mesh>
+        {/* generator step-up transformer */}
+        <Box p={[8, 2.6, -74]} s={[5, 5.2, 4.5]} c="#6f7672" rough={0.6} />
         {selected && (
-          <mesh rotation-x={-Math.PI / 2} position={[0, 0.15, 0]}>
-            <ringGeometry args={[13, 14, 48]} />
+          <mesh rotation-x={-Math.PI / 2} position={[0, 0.2, -42]}>
+            <ringGeometry args={[19, 20.5, 56]} />
             <meshBasicMaterial color={FLOW} />
           </mesh>
         )}
-        <Html position={[0, 31, 12]} center distanceFactor={140} zIndexRange={[10, 0]} className="tag-wrap">
+        <Html position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]} className="tag-wrap">
           <div className={`tag tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
@@ -163,39 +194,148 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   );
 }
 
-function GasHeader() {
+function SteamCycle() {
+  const output = useStore((s) => s.plant.outputMw);
+  const fans = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const cols = 3, rows = 6, x0 = -172, z0 = -80, pitch = 10;
+  const angle = useRef(0);
+  useFrame((_, dt) => {
+    if (!fans.current) return;
+    angle.current += dt * (0.6 + 5 * (output / 2700));
+    for (let i = 0; i < cols * rows; i++) {
+      dummy.position.set(x0 + (i % cols) * pitch, 23.6, z0 + Math.floor(i / cols) * pitch);
+      dummy.rotation.set(0, angle.current + i, 0);
+      dummy.updateMatrix();
+      fans.current.setMatrixAt(i, dummy.matrix);
+    }
+    fans.current.instanceMatrix.needsUpdate = true;
+  });
+  const legs: V3[] = [];
+  for (let c = 0; c <= cols; c++) for (let r = 0; r <= rows; r += 2) legs.push([x0 - 5 + c * pitch, 10.5, z0 - 5 + r * pitch]);
   return (
     <group>
-      <mesh position={[0, 1.2, -52]} rotation-z={Math.PI / 2}>
-        <cylinderGeometry args={[0.9, 0.9, 200, 12]} />
-        <meshStandardMaterial color="#c9a227" roughness={0.5} metalness={0.3} />
+      {/* steam turbine hall */}
+      <Box p={[-126, 11, -44]} s={[22, 22, 40]} c={CLAD} />
+      <Box p={[-126, 22.4, -44]} s={[22.4, 0.8, 40.4]} c="#a9aea8" />
+      {/* steam duct to the condenser */}
+      <mesh position={[-146, 19, -44]} rotation-z={Math.PI / 2} castShadow>
+        <cylinderGeometry args={[2.4, 2.4, 22, 14]} />
+        <meshStandardMaterial color="#b3b7b1" metalness={0.3} roughness={0.5} />
       </mesh>
-      {Array.from({ length: 8 }, (_, i) => (
-        <mesh key={i} position={[UNIT_X(i), 1.2, -48]} rotation-x={Math.PI / 2}>
-          <cylinderGeometry args={[0.45, 0.45, 8, 8]} />
-          <meshStandardMaterial color="#c9a227" roughness={0.5} metalness={0.3} />
+      {/* air-cooled condenser: fan deck on A-frame legs */}
+      <Box p={[x0 + pitch, 22, z0 + 2.5 * pitch]} s={[cols * pitch + 2, 2, rows * pitch + 2]} c="#b9bdb7" />
+      {legs.map((p, i) => <Box key={i} p={p} s={[0.9, 21, 0.9]} c="#6e7470" />)}
+      {Array.from({ length: cols * rows }, (_, i) => (
+        <mesh key={i} position={[x0 + (i % cols) * pitch, 23.1, z0 + Math.floor(i / cols) * pitch]} rotation-x={-Math.PI / 2}>
+          <ringGeometry args={[3.6, 4.4, 24]} />
+          <meshStandardMaterial color="#8e938f" side={THREE.DoubleSide} />
         </mesh>
       ))}
+      <instancedMesh ref={fans} args={[undefined, undefined, cols * rows]} castShadow>
+        <boxGeometry args={[7, 0.25, 0.9]} />
+        <meshStandardMaterial color="#5f6561" />
+      </instancedMesh>
+      <Html position={[-150, 32, -54]} center distanceFactor={180} zIndexRange={[10, 0]}>
+        <div className="tag tag-muted"><strong>Steam turbine + air-cooled condenser</strong></div>
+      </Html>
     </group>
   );
 }
 
-function FlowLine({ points, mw, max }: { points: [number, number, number][]; mw: number; max: number }) {
+function GasSupply() {
+  return (
+    <group>
+      <mesh position={[0, 1, -38]} rotation-z={Math.PI / 2}>
+        <cylinderGeometry args={[0.9, 0.9, 220, 12]} />
+        <meshStandardMaterial color={GAS} roughness={0.5} metalness={0.3} />
+      </mesh>
+      {/* metering station where the pipeline enters */}
+      <Box p={[118, 2, -34]} s={[12, 4, 8]} c="#d5d1c4" />
+      <Box p={[110, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
+      <Box p={[114, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
+      <Html position={[118, 9, -34]} center distanceFactor={150} zIndexRange={[10, 0]}>
+        <div className="tag tag-muted"><strong>Gas metering</strong></div>
+      </Html>
+    </group>
+  );
+}
+
+function Gantry({ x, z }: { x: number; z: number }) {
+  return (
+    <group position={[x, 0, z]}>
+      <Box p={[-4, 6, 0]} s={[0.5, 12, 0.5]} c="#7a807c" />
+      <Box p={[4, 6, 0]} s={[0.5, 12, 0.5]} c="#7a807c" />
+      <Box p={[0, 12, 0]} s={[9, 0.6, 0.6]} c="#7a807c" />
+      <Box p={[0, 1.6, 5]} s={[2, 3.2, 1.6]} c="#9aa09b" />
+    </group>
+  );
+}
+
+function Switchyard() {
+  const { x, z } = SWITCHYARD;
+  const fence: V3[] = [[x - 26, 1.2, z - 34], [x + 26, 1.2, z - 34], [x + 26, 1.2, z + 34], [x - 26, 1.2, z + 34], [x - 26, 1.2, z - 34]];
+  return (
+    <group>
+      <mesh rotation-x={-Math.PI / 2} position={[x, 0.15, z]} receiveShadow>
+        <planeGeometry args={[52, 68]} />
+        <meshStandardMaterial color="#c4c0b6" roughness={1} />
+      </mesh>
+      <Line points={fence} color="#6b6862" lineWidth={1} />
+      {[-14, 0, 14].map((dx) => [-22, -2, 18].map((dz) => <Gantry key={`${dx}${dz}`} x={x + dx} z={z + dz} />))}
+      {/* transmission tower leaving the site */}
+      <group position={[x + 40, 0, z]}>
+        {[[-3, -3], [3, -3], [-3, 3], [3, 3]].map(([a, b], i) => (
+          <mesh key={i} position={[a * 0.55, 15, b * 0.55]} rotation={[b * 0.035, 0, -a * 0.035]}>
+            <boxGeometry args={[0.5, 30, 0.5]} />
+            <meshStandardMaterial color="#7a807c" />
+          </mesh>
+        ))}
+        <Box p={[0, 26, 0]} s={[16, 0.6, 0.6]} c="#7a807c" />
+        <Box p={[0, 20, 0]} s={[12, 0.6, 0.6]} c="#7a807c" />
+      </group>
+      <Html position={[x, 18, z]} center distanceFactor={160} zIndexRange={[10, 0]}>
+        <div className="tag tag-muted"><strong>Switchyard</strong></div>
+      </Html>
+    </group>
+  );
+}
+
+function Utilities() {
+  return (
+    <group>
+      {[[100, 18], [116, 18]].map(([x, z], i) => (
+        <mesh key={i} position={[x, 7, z]} castShadow receiveShadow>
+          <cylinderGeometry args={[6.5, 6.5, 14, 28]} />
+          <meshStandardMaterial color="#eeeee9" roughness={0.6} />
+        </mesh>
+      ))}
+      {/* lube oil fin-fan coolers */}
+      {Array.from({ length: 5 }, (_, i) => (
+        <group key={i} position={[30 + i * 9, 0, -104]}>
+          <Box p={[0, 3, 0]} s={[8, 2, 7]} c="#a3a8a3" />
+          <Box p={[-3.4, 1, -3]} s={[0.4, 2, 0.4]} c="#5c625e" />
+          <Box p={[3.4, 1, 3]} s={[0.4, 2, 0.4]} c="#5c625e" />
+          <mesh position={[0, 4.05, 0]} rotation-x={-Math.PI / 2}>
+            <circleGeometry args={[2.8, 18]} />
+            <meshStandardMaterial color="#5f6561" />
+          </mesh>
+        </group>
+      ))}
+      {/* admin and control building */}
+      <Box p={[-120, 4, 72]} s={[30, 8, 16]} c="#d8d5cc" />
+    </group>
+  );
+}
+
+function FlowLine({ points, mw, max }: { points: V3[]; mw: number; max: number }) {
   const ref = useRef<{ material: { dashOffset: number } } | null>(null);
   useFrame((_, dt) => {
     if (ref.current) ref.current.material.dashOffset -= dt * (mw / max) * 30;
   });
   const active = mw > 1;
   return (
-    <Line
-      ref={ref as never}
-      points={points}
-      color={active ? FLOW : "#7b807c"}
-      lineWidth={active ? 2.6 : 1.2}
-      dashed
-      dashSize={3}
-      gapSize={active ? 2 : 0}
-    />
+    <Line ref={ref as never} points={points} color={active ? FLOW : "#7b807c"} lineWidth={active ? 2.6 : 1.2} dashed dashSize={3} gapSize={active ? 2 : 0} />
   );
 }
 
@@ -203,22 +343,17 @@ function PowerFlow() {
   const turbines = useStore((s) => s.plant.turbines);
   const battery = useStore((s) => s.plant.battery);
   const demand = useStore((s) => s.plant.demandMw);
+  const output = useStore((s) => s.plant.outputMw);
+  const sy = SWITCHYARD;
   return (
     <group>
       {turbines.map((tb, i) => (
-        <FlowLine key={tb.id} points={[[UNIT_X(i), 7, -10], [UNIT_X(i), 7, 0]]} mw={tb.outputMw} max={335} />
+        <FlowLine key={tb.id} points={[[UNIT_X(i) + 8, 7, -76], [UNIT_X(i) + 8, 9, BUS_Z]]} mw={tb.outputMw} max={335} />
       ))}
-      <FlowLine points={[[-130, 7, 0], [130, 7, 0]]} mw={demand} max={2700} />
-      <FlowLine points={[[-132, 7, 6], [-132, 7, 0]]} mw={Math.abs(battery.powerMw)} max={400} />
-      <FlowLine points={[[0, 7, 0], [0, 7, 38]]} mw={demand} max={2700} />
-      {[-120, -60, 0, 60, 120].map((x) => (
-        <group key={x} position={[x, 0, 0]}>
-          <mesh position={[0, 3.5, 0]}>
-            <boxGeometry args={[0.6, 7, 0.6]} />
-            <meshStandardMaterial color="#5c625e" />
-          </mesh>
-        </group>
-      ))}
+      <FlowLine points={[[UNIT_X(0) + 8, 9, BUS_Z], [sy.x - 14, 9, BUS_Z], [sy.x - 14, 9, sy.z - 34]]} mw={output} max={2700} />
+      <FlowLine points={[[sy.x - 20, 9, sy.z + 34], [sy.x - 20, 9, 60], [76, 9, 60]]} mw={demand} max={2700} />
+      <FlowLine points={[[-150, 7, 40], [-150, 9, 60], [-76, 9, 60]]} mw={Math.abs(battery.powerMw)} max={400} />
+      {[-90, -30, 30, 90].map((x) => <Box key={x} p={[x + 8, 4.5, BUS_Z]} s={[0.6, 9, 0.6]} c="#5c625e" />)}
     </group>
   );
 }
@@ -231,7 +366,7 @@ function DataCenter() {
   useEffect(() => {
     if (!racks.current) return;
     for (let i = 0; i < count; i++) {
-      dummy.position.set(-70 + (i % 30) * 4.8, 4 + Math.floor(i / 30) * 5, 38.9);
+      dummy.position.set(-70 + (i % 30) * 4.8, 4 + Math.floor(i / 30) * 5, 45.9);
       dummy.updateMatrix();
       racks.current.setMatrixAt(i, dummy.matrix);
     }
@@ -241,21 +376,13 @@ function DataCenter() {
   return (
     <Selectable id="datacenter">
       <group>
-        <mesh position={[0, 8, 55]} castShadow receiveShadow>
-          <boxGeometry args={[150, 16, 32]} />
-          <meshStandardMaterial color="#d6d8d2" roughness={0.8} />
-        </mesh>
+        <Box p={[0, 8, 62]} s={[150, 16, 32]} c="#d6d8d2" rough={0.8} />
         <instancedMesh ref={racks} args={[undefined, undefined, count]}>
           <boxGeometry args={[3.6, 0.5, 0.2]} />
           <meshStandardMaterial color="#9fc3e6" emissive="#6fa8dc" emissiveIntensity={glow} toneMapped={false} />
         </instancedMesh>
-        {[-50, -20, 10, 40].map((x) => (
-          <mesh key={x} position={[x, 17, 60]} castShadow>
-            <boxGeometry args={[10, 2, 8]} />
-            <meshStandardMaterial color="#a7aba5" />
-          </mesh>
-        ))}
-        <Html position={[0, 22, 55]} center distanceFactor={160} zIndexRange={[10, 0]}>
+        {[-50, -20, 10, 40].map((x) => <Box key={x} p={[x, 17, 66]} s={[10, 2, 8]} c="#a7aba5" />)}
+        <Html position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
           <div className="tag tag-dc">
             <strong>AI data center</strong>
             <span>{demand.toFixed(0)} MW load</span>
@@ -271,7 +398,7 @@ function BatteryYard() {
   const discharging = battery.powerMw > 5;
   return (
     <Selectable id="battery">
-      <group position={[-132, 0, 22]}>
+      <group position={[-150, 0, 26]}>
         {Array.from({ length: 12 }, (_, i) => (
           <mesh key={i} position={[(i % 4) * 7.5 - 11, 1.6, Math.floor(i / 4) * 5 - 5]} castShadow>
             <boxGeometry args={[6, 3.2, 2.6]} />
@@ -282,7 +409,7 @@ function BatteryYard() {
             />
           </mesh>
         ))}
-        <Html position={[0, 9, 0]} center distanceFactor={140} zIndexRange={[10, 0]}>
+        <Html position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
           <div className="tag">
             <strong>Battery</strong>
             <span>{battery.socPct.toFixed(0)}%{discharging ? `, out ${battery.powerMw.toFixed(0)} MW` : ""}</span>
@@ -297,7 +424,7 @@ function Truck() {
   const sh = useStore((s) => s.plant.shipments[0]);
   const group = useRef<THREE.Group>(null);
   const curve = useMemo(() => new THREE.CatmullRomCurve3(ROAD.map((p) => new THREE.Vector3(...p))), []);
-  const onSite = sh && sh.remainingKm <= ROAD_KM;
+  const onSite = !!sh && sh.remainingKm <= ROAD_KM;
   useFrame(() => {
     if (!group.current || !sh) return;
     const u = Math.min(1, Math.max(0, 1 - sh.remainingKm / ROAD_KM));
@@ -309,21 +436,12 @@ function Truck() {
   if (!sh) return null;
   return (
     <>
-      <Line points={ROAD} color="#55524c" lineWidth={6} />
-      <mesh position={[126, 5, 66]} castShadow receiveShadow>
-        <boxGeometry args={[22, 10, 14]} />
-        <meshStandardMaterial color="#cfcac0" />
-      </mesh>
+      <Line points={ROAD} color={ASPHALT} lineWidth={7} />
+      <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" />
       <group ref={group} visible={onSite} position={ROAD[0]}>
         <Selectable id={sh.id}>
-          <mesh position={[0, 2.2, -2]} castShadow>
-            <boxGeometry args={[2.6, 3, 9]} />
-            <meshStandardMaterial color="#e8e6e0" />
-          </mesh>
-          <mesh position={[0, 1.8, 4]} castShadow>
-            <boxGeometry args={[2.6, 2.6, 3]} />
-            <meshStandardMaterial color={FLOW} />
-          </mesh>
+          <Box p={[0, 2.2, -2]} s={[2.6, 3, 9]} c="#e8e6e0" />
+          <Box p={[0, 1.8, 4]} s={[2.6, 2.6, 3]} c={FLOW} />
           <Html position={[0, 7, 0]} center distanceFactor={120} zIndexRange={[10, 0]}>
             <div className="tag">
               <strong>{sh.id}</strong>
@@ -342,16 +460,19 @@ function Scene() {
   return (
     <>
       <Sky sunPosition={[-1, 0.06, -0.35]} turbidity={9} rayleigh={2.4} mieCoefficient={0.006} mieDirectionalG={0.85} />
-      <fog attach="fog" args={["#d9b48f", 260, 640]} />
+      <fog attach="fog" args={["#d9b48f", 320, 760]} />
       <hemisphereLight args={["#c7d3e8", "#8a6a48", 0.9]} />
       <directionalLight
-        position={[-180, 70, -90]} intensity={2.2} color="#ffd2a1" castShadow
+        position={[-200, 80, -110]} intensity={2.2} color="#ffd2a1" castShadow
         shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004}
-        shadow-camera-left={-200} shadow-camera-right={200} shadow-camera-top={140} shadow-camera-bottom={-140} shadow-camera-far={500}
+        shadow-camera-left={-240} shadow-camera-right={240} shadow-camera-top={170} shadow-camera-bottom={-170} shadow-camera-far={600}
       />
-      <Ground />
-      <GasHeader />
+      <Site />
+      <GasSupply />
       {turbines.map((tb, i) => <TurbineUnit key={tb.id} tb={tb} index={i} selected={selected === tb.id} />)}
+      <SteamCycle />
+      <Switchyard />
+      <Utilities />
       <PowerFlow />
       <DataCenter />
       <BatteryYard />
@@ -368,11 +489,11 @@ export function PlantScene() {
       shadows
       dpr={[1, 1.75]}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.9 }}
-      camera={{ position: [150, 120, 210], fov: 34, near: 1, far: 1500 }}
+      camera={{ position: [190, 160, 260], fov: 34, near: 1, far: 1800 }}
       onPointerMissed={() => select(null)}
     >
       <Scene />
-      <OrbitControls ref={controls} target={[0, 0, 5]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={520} enableDamping dampingFactor={0.08} />
+      <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
       <CameraRig controls={controls} />
     </Canvas>
   );
