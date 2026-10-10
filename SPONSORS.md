@@ -56,6 +56,7 @@ Shape that fits most tracks: ESP32 sensors -> Tiger Data (time series) -> web da
 A physical demo at the judging table is strong for Design and Completion.
 
 ## Decision
+- Project name: Always On
 - Sponsor track: Chevron (pending the announced challenge)
 - Plus: General, Gemini, ElevenLabs, Tiger Data, GoDaddy domain
 - No hardware available. Software only.
@@ -82,3 +83,20 @@ A physical demo at the judging table is strong for Design and Completion.
 - Simulator + planner logic
 - Backend, database (Tiger Data), AI copilot
 - Dashboard UI
+
+### Architecture rules
+- The simulator and planner compute every number. Gemini only explains results it is handed through tool calls. It never invents figures.
+- Copilot is read-only. No commands to the plant.
+- Every number in the UI is tagged as real public data (ERCOT, EIA) or simulated.
+- Henry Hub is the EIA benchmark; West Texas (Waha) gas trades lower. Label it as a benchmark.
+- Simulator is a pure, seeded module so drills are repeatable and testable.
+
+### Accounts to set up before 1 PM (no code)
+- [ ] Gemini API key (Google AI Studio)
+- [ ] ElevenLabs account + MLH code
+- [ ] Tiger Data (Tiger Cloud) free instance
+- [ ] EIA Open Data API key (eia.gov/opendata)
+- [ ] ERCOT API registration (apiexplorer.ercot.com)
+- [ ] Vercel login
+- [ ] Vultr credits via MLH code (optional, for the simulator worker)
+- [ ] GoDaddy Registry domain via MLH code
