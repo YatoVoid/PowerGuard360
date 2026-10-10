@@ -168,7 +168,7 @@ h1, h2, h3 { margin: 0; }
   grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas: "scene rail" "fleet rail";
 }
-.scene { grid-area: scene; position: relative; min-height: 0; background: #d9b48f; }
+.scene { grid-area: scene; position: relative; min-height: 0; overflow: hidden; background: #d9b48f; }
 .scene canvas { display: block; }
 .scene-loading { display: grid; place-items: center; height: 100%; color: var(--ink-2); }
 .hint-touch { display: none; }
@@ -177,7 +177,12 @@ h1, h2, h3 { margin: 0; }
 .rail .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .fleet { grid-area: fleet; padding: 12px var(--gap) var(--gap); border-top: 1px solid var(--rule); background: var(--panel); }
 
-.tag-wrap { pointer-events: none; }
+.tag-btn { cursor: pointer; font: inherit; }
+.tag.tag-btn { font: 500 13px/1.15 var(--font-num); }
+.tag-btn:hover { border-color: var(--ink); }
+.tag-btn.tag-muted { font-size: 12px; }
+@media (pointer: coarse) { .tag-btn { padding: 6px 10px; } }
+.tag-btn:focus-visible { outline: 2px solid var(--flow); outline-offset: 2px; }
 .tag {
   display: grid; gap: 0; padding: 3px 8px 4px; white-space: nowrap; text-align: center;
   background: rgb(228 230 225 / 0.92); border: 1px solid var(--rule); border-radius: var(--radius-s);

@@ -178,6 +178,37 @@ export function AssetDetail() {
       </div>
     );
   }
+  if (selected === "switchyard") {
+    return (
+      <div className="detail">
+        <div className="detail-head"><h3>Switchyard</h3></div>
+        <dl className="kv">
+          <div><dt>Power to data center</dt><dd>{fmt(plant.demandMw)} MW</dd></div>
+          <div><dt>From turbines</dt><dd>{fmt(plant.outputMw)} MW</dd></div>
+          <div className={plant.gridMw > 1 ? "is-watch" : ""}><dt>Grid tie</dt><dd>{plant.gridMw > 1 ? `importing ${fmt(plant.gridMw)} MW` : "standby"}</dd></div>
+          <div><dt>Voltage</dt><dd>345 kV</dd></div>
+          <div><dt>Breakers closed</dt><dd>9 / 9</dd></div>
+        </dl>
+        <p className="note">Steps turbine power up to transmission voltage and routes it to the data center. The grid tie only carries power when the plant falls short.</p>
+      </div>
+    );
+  }
+  if (selected === "gas") {
+    const kgS = plant.turbines.reduce((sum, t) => sum + t.fuelFlowKgS, 0);
+    // 47 MJ/kg lower heating value, 1,055 MJ per MMBtu
+    const mmbtuH = (kgS * 47 * 3600) / 1055;
+    return (
+      <div className="detail">
+        <div className="detail-head"><h3>Gas metering</h3></div>
+        <dl className="kv">
+          <div><dt>Fuel flow</dt><dd>{fmt(kgS, 1)} kg/s</dd></div>
+          <div><dt>Heat input</dt><dd>{fmt(mmbtuH)} MMBtu/h</dd></div>
+          <div><dt>Units burning gas</dt><dd>{plant.turbines.filter((t) => t.fuelFlowKgS > 0).length} / {plant.turbines.length}</dd></div>
+        </dl>
+        <p className="note">Permian Basin gas from the pipeline is measured here before it reaches the turbines.</p>
+      </div>
+    );
+  }
   if (selected === "acc") {
     const load = Math.min(1, plant.outputMw / 2700);
     // Simulated: in a combined cycle the steam turbine makes roughly a third of plant output,

@@ -36,6 +36,9 @@ const CAMERA_OFFSET: Record<string, V3> = {
   acc: [-70, 70, 95],
   datacenter: [60, 70, 120],
   battery: [30, 40, 60],
+  switchyard: [55, 60, 85],
+  gas: [30, 35, 55],
+  dock: [50, 70, 110],
 };
 
 // Focus easing adapted from WareTwin (MIT, github.com/WayneChou-bot/WareTwin).
@@ -46,7 +49,8 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
   useEffect(() => {
     const p = assetPosition(selected);
     if (!p) return;
-    const off = CAMERA_OFFSET[selected ?? ""] ?? [40, 42, 64];
+    const isTruck = !!selected && (selected.startsWith("TRL-") || selected.startsWith("TNK-"));
+    const off = CAMERA_OFFSET[isTruck ? "dock" : selected ?? ""] ?? [40, 42, 64];
     goal.current = new THREE.Vector3(p[0], 6, p[2]);
     camGoal.current = new THREE.Vector3(p[0] + off[0], off[1], p[2] + off[2]);
   }, [selected]);
@@ -80,6 +84,8 @@ function assetPosition(id: string | null): V3 | null {
   if (id.startsWith("GT-")) return [UNIT_X(Number(id.slice(3)) - 1), 0, -42];
   if (id === "datacenter") return [0, 0, 62];
   if (id === "acc") return [-161, 14, -55];
+  if (id === "switchyard") return [SWITCHYARD.x, 0, SWITCHYARD.z];
+  if (id === "gas") return [118, 0, -34];
   if (id === "battery") return [-150, 0, 32];
   if (id.startsWith("TRL-") || id.startsWith("TNK-")) return [140, 0, 82];
   return null;
@@ -133,16 +139,42 @@ function BeaconLight({ position }: { position: V3 }) {
   );
 }
 
+// A press that travels further than this is a camera drag, not a pick. Fingers wobble more than a mouse.
+const pressStart = { x: 0, y: 0 };
+// Labels render in their own React root, so a native capture listener is the one place that sees every press.
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerdown", (e) => { pressStart.x = e.clientX; pressStart.y = e.clientY; }, { capture: true, passive: true });
+}
+function isTap(e: { clientX: number; clientY: number; pointerType?: string }) {
+  const tolerance = e.pointerType === "touch" || e.pointerType === "pen" ? 14 : 6;
+  return Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) <= tolerance;
+}
+
 function Selectable({ id, children }: { id: string; children: React.ReactNode }) {
   const select = useStore((s) => s.select);
   return (
     <group
-      onClick={(e) => { e.stopPropagation(); select(id); }}
+      onClick={(e) => { e.stopPropagation(); if (isTap(e.nativeEvent as PointerEvent)) select(id); }}
       onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = "pointer"; }}
       onPointerOut={() => { document.body.style.cursor = ""; }}
     >
       {children}
     </group>
+  );
+}
+
+function Label({ id, className = "", children }: { id: string; className?: string; children: React.ReactNode }) {
+  const select = useStore((s) => s.select);
+  return (
+    <button
+      type="button"
+      className={`tag tag-btn ${className}`}
+      // The canvas listens on the same container, so keep label clicks from reading as "clicked empty ground".
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); if (isTap(e.nativeEvent as PointerEvent)) select(id); }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -205,11 +237,11 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
             <meshBasicMaterial color={FLOW} />
           </mesh>
         )}
-        <Html position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]} className="tag-wrap">
-          <div className={`tag tag-${tb.status}`}>
+        <Html position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
+          <Label id={tb.id} className={`tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
-          </div>
+          </Label>
         </Html>
       </group>
     </Selectable>
@@ -392,7 +424,7 @@ function AirCooledCondenser() {
         </group>
       ))}
       <Html position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
-        <div className="tag tag-muted"><strong>Air-cooled condenser</strong></div>
+        <Label id="acc" className="tag-muted"><strong>Air-cooled condenser</strong></Label>
       </Html>
     </group>
     </Selectable>
@@ -412,6 +444,7 @@ function SteamCycle() {
 
 function GasSupply() {
   return (
+    <Selectable id="gas">
     <group>
       <mesh position={[0, 1, -38]} rotation-z={Math.PI / 2}>
         <cylinderGeometry args={[0.9, 0.9, 220, 12]} />
@@ -422,9 +455,10 @@ function GasSupply() {
       <Box p={[110, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
       <Box p={[114, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
       <Html position={[118, 9, -34]} center zIndexRange={[10, 0]}>
-        <div className="tag tag-muted"><strong>Gas metering</strong></div>
+        <Label id="gas" className="tag-muted"><strong>Gas metering</strong></Label>
       </Html>
     </group>
+    </Selectable>
   );
 }
 
@@ -443,6 +477,7 @@ function Switchyard() {
   const { x, z } = SWITCHYARD;
   const fence: V3[] = [[x - 26, 1.2, z - 34], [x + 26, 1.2, z - 34], [x + 26, 1.2, z + 34], [x - 26, 1.2, z + 34], [x - 26, 1.2, z - 34]];
   return (
+    <Selectable id="switchyard">
     <group>
       <mesh rotation-x={-Math.PI / 2} position={[x, 0.15, z]} receiveShadow>
         <planeGeometry args={[52, 68]} />
@@ -462,9 +497,10 @@ function Switchyard() {
         <Box p={[0, 20, 0]} s={[12, 0.6, 0.6]} c="#7a807c" />
       </group>
       <Html position={[x, 18, z]} center zIndexRange={[10, 0]}>
-        <div className="tag tag-muted"><strong>Switchyard</strong></div>
+        <Label id="switchyard" className="tag-muted"><strong>Switchyard</strong></Label>
       </Html>
     </group>
+    </Selectable>
   );
 }
 
@@ -550,10 +586,10 @@ function DataCenter() {
         </instancedMesh>
         {[-50, -20, 10, 40].map((x) => <Box key={x} p={[x, 17, 66]} s={[10, 2, 8]} c="#a7aba5" />)}
         <Html position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
-          <div className="tag tag-dc">
+          <Label id="datacenter" className="tag-dc">
             <strong>AI data center</strong>
             <span>{demand.toFixed(0)} MW load</span>
-          </div>
+          </Label>
         </Html>
       </group>
     </Selectable>
@@ -577,10 +613,10 @@ function BatteryYard() {
           </mesh>
         ))}
         <Html position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
-          <div className="tag">
+          <Label id="battery">
             <strong>Battery</strong>
             <span>{battery.socPct.toFixed(0)}%{discharging ? `, out ${battery.powerMw.toFixed(0)} MW` : ""}</span>
-          </div>
+          </Label>
         </Html>
       </group>
     </Selectable>
@@ -605,17 +641,26 @@ function Truck() {
   return (
     <>
       <Line points={ROAD} color={ASPHALT} lineWidth={7} />
-      <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" />
+      <Selectable id={sh.id}>
+        <Box p={[150, 5, 68]} s={[24, 10, 14]} c="#cfcac0" />
+      </Selectable>
+      {/* The delivery dock carries the arrival readout so it stays put while the truck moves. */}
+      <Html position={[150, 15, 68]} center distanceFactor={110} zIndexRange={[10, 0]}>
+        <Label id={sh.id}>
+          <strong>Delivery dock</strong>
+          <span>
+            {sh.arrived
+              ? `${sh.id} on site`
+              : onSite
+                ? `${sh.id} arriving, ${(sh.remainingKm * 1000).toFixed(0)} m out`
+                : `Next: ${sh.id}, ${sh.remainingKm.toFixed(0)} km out`}
+          </span>
+        </Label>
+      </Html>
       <group ref={group} visible={onSite} position={ROAD[0]}>
         <Selectable id={sh.id}>
           <Box p={[0, 2.2, -2]} s={[2.6, 3, 9]} c="#e8e6e0" />
           <Box p={[0, 1.8, 4]} s={[2.6, 2.6, 3]} c={FLOW} />
-          <Html position={[0, 7, 0]} center distanceFactor={120} zIndexRange={[10, 0]}>
-            <div className="tag">
-              <strong>{sh.id}</strong>
-              <span>{sh.arrived ? "on site" : `${(sh.remainingKm * 1000).toFixed(0)} m out`}</span>
-            </div>
-          </Html>
         </Selectable>
       </group>
     </>
@@ -658,7 +703,10 @@ export function PlantScene() {
       dpr={[1, 1.75]}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.9 }}
       camera={{ position: [190, 160, 260], fov: 34, near: 1, far: 1800 }}
-      onPointerMissed={() => select(null)}
+      onPointerMissed={(e) => {
+        if ((e.target as Element | null)?.closest?.(".tag-btn")) return;
+        if (isTap(e as PointerEvent)) select(null);
+      }}
     >
       <Scene />
       <FitToScreen />
