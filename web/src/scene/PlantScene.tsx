@@ -31,6 +31,13 @@ const ROAD_KM = 3;
 const BUS_Z = -86;
 const SWITCHYARD = { x: 152, z: -45 };
 
+// Large assets need the camera further back, and the condenser reads best from the open south-west side.
+const CAMERA_OFFSET: Record<string, V3> = {
+  acc: [-70, 70, 95],
+  datacenter: [60, 70, 120],
+  battery: [30, 40, 60],
+};
+
 // Focus easing adapted from WareTwin (MIT, github.com/WayneChou-bot/WareTwin).
 function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl | null> }) {
   const selected = useStore((s) => s.selected);
@@ -39,8 +46,9 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
   useEffect(() => {
     const p = assetPosition(selected);
     if (!p) return;
+    const off = CAMERA_OFFSET[selected ?? ""] ?? [40, 42, 64];
     goal.current = new THREE.Vector3(p[0], 6, p[2]);
-    camGoal.current = new THREE.Vector3(p[0] + 40, 42, p[2] + 64);
+    camGoal.current = new THREE.Vector3(p[0] + off[0], off[1], p[2] + off[2]);
   }, [selected]);
   useFrame(({ camera }, dt) => {
     const c = controls.current;
@@ -71,6 +79,7 @@ function assetPosition(id: string | null): V3 | null {
   if (!id) return null;
   if (id.startsWith("GT-")) return [UNIT_X(Number(id.slice(3)) - 1), 0, -42];
   if (id === "datacenter") return [0, 0, 62];
+  if (id === "acc") return [-161, 14, -55];
   if (id === "battery") return [-150, 0, 32];
   if (id.startsWith("TRL-") || id.startsWith("TNK-")) return [140, 0, 82];
   return null;
@@ -207,51 +216,196 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   );
 }
 
-function SteamCycle() {
+// Ribbed look for finned tube bundles and the wind wall, drawn once into a small canvas.
+function useStripeTexture(base: string, line: string, repeat: [number, number]) {
+  return useMemo(() => {
+    const c = document.createElement("canvas");
+    c.width = 64; c.height = 8;
+    const g = c.getContext("2d")!;
+    g.fillStyle = base; g.fillRect(0, 0, 64, 8);
+    g.fillStyle = line;
+    for (let x = 0; x < 64; x += 8) g.fillRect(x, 0, 2, 8);
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(...repeat);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }, [base, line, repeat]);
+}
+
+function Pipe({ from, to, r, c = "#e6e6e1" }: { from: V3; to: V3; r: number; c?: string }) {
+  const { pos, quat, len } = useMemo(() => {
+    const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to);
+    const dir = b.clone().sub(a);
+    return {
+      pos: a.clone().add(b).multiplyScalar(0.5),
+      quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize()),
+      len: dir.length(),
+    };
+  }, [from, to]);
+  return (
+    <mesh position={pos} quaternion={quat} castShadow>
+      <cylinderGeometry args={[r, r, len, 20]} />
+      <meshStandardMaterial color={c} roughness={0.45} metalness={0.15} />
+    </mesh>
+  );
+}
+
+function Elbow({ at, r, c = "#e6e6e1" }: { at: V3; r: number; c?: string }) {
+  return (
+    <mesh position={at} castShadow>
+      <sphereGeometry args={[r * 1.04, 18, 14]} />
+      <meshStandardMaterial color={c} roughness={0.45} metalness={0.15} />
+    </mesh>
+  );
+}
+
+// Air-cooled condenser, after a standard A-frame design: axial fans at deck level push air up through
+// inclined finned tube bundles; steam enters along the apex header and condenses on the way down.
+const ACC = {
+  streets: [-172, -161, -150],
+  width: 10,
+  z0: -84,
+  z1: -26,
+  deck: 18,
+  apex: 29,
+  fansPerStreet: 6,
+};
+
+function AirCooledCondenser() {
   const output = useStore((s) => s.plant.outputMw);
   const fans = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  const cols = 3, rows = 6, x0 = -172, z0 = -80, pitch = 10;
   const angle = useRef(0);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const finTex = useStripeTexture("#5d6460", "#3f4542", [24, 1]);
+  const wallTex = useStripeTexture("#dcdcd6", "#c9cac3", [40, 1]);
+  const { streets, width, z0, z1, deck, apex, fansPerStreet } = ACC;
+  const len = z1 - z0;
+  const zc = (z0 + z1) / 2;
+  const fanPitch = len / fansPerStreet;
+  const fanCount = streets.length * fansPerStreet;
+  const xMin = streets[0] - width / 2 - 0.5, xMax = streets[streets.length - 1] + width / 2 + 0.5;
+  const half = width / 2;
+  const tilt = Math.atan2(apex - deck, half);
+  const slant = Math.hypot(apex - deck, half);
+
   useFrame((_, dt) => {
     if (!fans.current) return;
     angle.current += dt * (0.6 + 5 * (output / 2700));
-    for (let i = 0; i < cols * rows; i++) {
-      dummy.position.set(x0 + (i % cols) * pitch, 23.6, z0 + Math.floor(i / cols) * pitch);
-      dummy.rotation.set(0, angle.current + i, 0);
-      dummy.updateMatrix();
-      fans.current.setMatrixAt(i, dummy.matrix);
+    let i = 0;
+    for (const x of streets) {
+      for (let k = 0; k < fansPerStreet; k++) {
+        dummy.position.set(x, deck - 0.6, z0 + fanPitch * (k + 0.5));
+        dummy.rotation.set(0, angle.current + i * 0.7, 0);
+        dummy.updateMatrix();
+        fans.current.setMatrixAt(i++, dummy.matrix);
+      }
     }
     fans.current.instanceMatrix.needsUpdate = true;
   });
-  const legs: V3[] = [];
-  for (let c = 0; c <= cols; c++) for (let r = 0; r <= rows; r += 2) legs.push([x0 - 5 + c * pitch, 10.5, z0 - 5 + r * pitch]);
+
+  const colX = [xMin, ...streets.slice(1).map((x) => x - width / 2 - 0.5), xMax];
+  const colZ = [z0, z0 + len * 0.25, z0 + len * 0.5, z0 + len * 0.75, z1];
+  const braces: { a: V3; b: V3 }[] = [];
+  for (let i = 0; i < colZ.length - 1; i++) {
+    for (const x of [xMin, xMax]) {
+      braces.push({ a: [x, 0.5, colZ[i]], b: [x, deck - 1, colZ[i + 1]] }, { a: [x, deck - 1, colZ[i]], b: [x, 0.5, colZ[i + 1]] });
+    }
+  }
+  for (let i = 0; i < colX.length - 1; i++) {
+    for (const z of [z0, z1]) {
+      braces.push({ a: [colX[i], 0.5, z], b: [colX[i + 1], deck - 1, z] }, { a: [colX[i], deck - 1, z], b: [colX[i + 1], 0.5, z] });
+    }
+  }
+  const wallH = apex + 1 - deck;
+  const wallY = deck + wallH / 2;
+
+  return (
+    <Selectable id="acc">
+    <group>
+      {/* support columns and cross bracing */}
+      {colX.map((x) => colZ.map((z) => <Box key={`${x}${z}`} p={[x, deck / 2, z]} s={[0.9, deck, 0.9]} c="#7a807c" />))}
+      {braces.map((b, i) => <Pipe key={i} from={b.a} to={b.b} r={0.18} c="#7a807c" />)}
+      {/* deck beams between fan rows */}
+      {colX.map((x) => <Box key={`bx${x}`} p={[x, deck - 0.3, zc]} s={[0.8, 0.8, len + 1]} c="#8a908b" />)}
+      {colZ.map((z) => <Box key={`bz${z}`} p={[(xMin + xMax) / 2, deck - 0.3, z]} s={[xMax - xMin, 0.8, 0.8]} c="#8a908b" />)}
+      {/* fan shrouds and blades */}
+      {streets.map((x) => Array.from({ length: fansPerStreet }, (_, k) => (
+        <mesh key={`${x}-${k}`} position={[x, deck - 0.6, z0 + fanPitch * (k + 0.5)]}>
+          <cylinderGeometry args={[4.3, 4.3, 1.6, 28, 1, true]} />
+          <meshStandardMaterial color="#9ca29d" side={THREE.DoubleSide} />
+        </mesh>
+      )))}
+      <instancedMesh ref={fans} args={[undefined, undefined, fanCount]} castShadow>
+        <boxGeometry args={[7.8, 0.15, 0.8]} />
+        <meshStandardMaterial color="#4f5552" />
+      </instancedMesh>
+      {/* A-frame tube bundles, steam header on the apex, condensate headers along the base */}
+      {streets.map((x) => (
+        <group key={`a${x}`}>
+          {[-1, 1].map((side) => (
+            <mesh
+              key={side}
+              position={[x + (side * half) / 2, (deck + apex) / 2, zc]}
+              rotation={[0, 0, side * (Math.PI / 2 - tilt)]}
+              castShadow
+              receiveShadow
+            >
+              <boxGeometry args={[0.5, slant, len]} />
+              <meshStandardMaterial map={finTex} roughness={0.85} metalness={0.25} />
+            </mesh>
+          ))}
+          <Pipe from={[x, apex + 0.6, z0 - 6]} to={[x, apex + 0.6, z1]} r={1.3} />
+          <Pipe from={[x - half + 0.4, deck + 0.4, z0]} to={[x - half + 0.4, deck + 0.4, z1]} r={0.35} c="#b8bdb8" />
+          <Pipe from={[x + half - 0.4, deck + 0.4, z0]} to={[x + half - 0.4, deck + 0.4, z1]} r={0.35} c="#b8bdb8" />
+        </group>
+      ))}
+      {/* wind wall around the bundles */}
+      <mesh position={[xMin, wallY, zc]} castShadow receiveShadow>
+        <boxGeometry args={[0.4, wallH, len + 0.8]} />
+        <meshStandardMaterial map={wallTex} roughness={0.7} />
+      </mesh>
+      <mesh position={[xMax, wallY, zc]} castShadow receiveShadow>
+        <boxGeometry args={[0.4, wallH, len + 0.8]} />
+        <meshStandardMaterial map={wallTex} roughness={0.7} />
+      </mesh>
+      <mesh position={[(xMin + xMax) / 2, wallY, z1]} castShadow receiveShadow>
+        <boxGeometry args={[xMax - xMin, wallH, 0.4]} />
+        <meshStandardMaterial map={wallTex} roughness={0.7} />
+      </mesh>
+      <mesh position={[(xMin + xMax) / 2, wallY, z0]} castShadow receiveShadow>
+        <boxGeometry args={[xMax - xMin, wallH, 0.4]} />
+        <meshStandardMaterial map={wallTex} roughness={0.7} />
+      </mesh>
+      {/* steam duct: out of the turbine hall, up the riser, across the manifold, into each street header */}
+      <Pipe from={[-136, 14, -58]} to={[-140, 14, -58]} r={2.4} />
+      <Elbow at={[-140, 14, -58]} r={2.4} />
+      <Pipe from={[-140, 14, -58]} to={[-140, 14, -90]} r={2.4} />
+      <Elbow at={[-140, 14, -90]} r={2.4} />
+      <Pipe from={[-140, 14, -90]} to={[-140, apex + 0.6, -90]} r={2.4} />
+      <Elbow at={[-140, apex + 0.6, -90]} r={2.4} />
+      <Pipe from={[-140, apex + 0.6, -90]} to={[streets[0], apex + 0.6, -90]} r={2} />
+      {streets.map((x) => (
+        <group key={`m${x}`}>
+          <Elbow at={[x, apex + 0.6, -90]} r={2} />
+          <Pipe from={[x, apex + 0.6, -90]} to={[x, apex + 0.6, z0 - 6]} r={1.6} />
+        </group>
+      ))}
+      <Html position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
+        <div className="tag tag-muted"><strong>Air-cooled condenser</strong></div>
+      </Html>
+    </group>
+    </Selectable>
+  );
+}
+
+function SteamCycle() {
   return (
     <group>
       {/* steam turbine hall */}
       <Box p={[-126, 11, -44]} s={[22, 22, 40]} c={CLAD} />
       <Box p={[-126, 22.4, -44]} s={[22.4, 0.8, 40.4]} c="#a9aea8" />
-      {/* steam duct to the condenser */}
-      <mesh position={[-146, 19, -44]} rotation-z={Math.PI / 2} castShadow>
-        <cylinderGeometry args={[2.4, 2.4, 22, 14]} />
-        <meshStandardMaterial color="#b3b7b1" metalness={0.3} roughness={0.5} />
-      </mesh>
-      {/* air-cooled condenser: fan deck on A-frame legs */}
-      <Box p={[x0 + pitch, 22, z0 + 2.5 * pitch]} s={[cols * pitch + 2, 2, rows * pitch + 2]} c="#b9bdb7" />
-      {legs.map((p, i) => <Box key={i} p={p} s={[0.9, 21, 0.9]} c="#6e7470" />)}
-      {Array.from({ length: cols * rows }, (_, i) => (
-        <mesh key={i} position={[x0 + (i % cols) * pitch, 23.1, z0 + Math.floor(i / cols) * pitch]} rotation-x={-Math.PI / 2}>
-          <ringGeometry args={[3.6, 4.4, 24]} />
-          <meshStandardMaterial color="#8e938f" side={THREE.DoubleSide} />
-        </mesh>
-      ))}
-      <instancedMesh ref={fans} args={[undefined, undefined, cols * rows]} castShadow>
-        <boxGeometry args={[7, 0.25, 0.9]} />
-        <meshStandardMaterial color="#5f6561" />
-      </instancedMesh>
-      <Html position={[-150, 32, -54]} center distanceFactor={180} zIndexRange={[10, 0]}>
-        <div className="tag tag-muted"><strong>Steam turbine + air-cooled condenser</strong></div>
-      </Html>
+      <AirCooledCondenser />
     </group>
   );
 }
@@ -267,7 +421,7 @@ function GasSupply() {
       <Box p={[118, 2, -34]} s={[12, 4, 8]} c="#d5d1c4" />
       <Box p={[110, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
       <Box p={[114, 3, -30]} s={[1.2, 6, 1.2]} c={GAS} />
-      <Html position={[118, 9, -34]} center distanceFactor={150} zIndexRange={[10, 0]}>
+      <Html position={[118, 9, -34]} center zIndexRange={[10, 0]}>
         <div className="tag tag-muted"><strong>Gas metering</strong></div>
       </Html>
     </group>
@@ -307,7 +461,7 @@ function Switchyard() {
         <Box p={[0, 26, 0]} s={[16, 0.6, 0.6]} c="#7a807c" />
         <Box p={[0, 20, 0]} s={[12, 0.6, 0.6]} c="#7a807c" />
       </group>
-      <Html position={[x, 18, z]} center distanceFactor={160} zIndexRange={[10, 0]}>
+      <Html position={[x, 18, z]} center zIndexRange={[10, 0]}>
         <div className="tag tag-muted"><strong>Switchyard</strong></div>
       </Html>
     </group>

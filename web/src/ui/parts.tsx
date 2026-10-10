@@ -178,6 +178,24 @@ export function AssetDetail() {
       </div>
     );
   }
+  if (selected === "acc") {
+    const load = Math.min(1, plant.outputMw / 2700);
+    // Simulated: in a combined cycle the steam turbine makes roughly a third of plant output,
+    // and the condenser rejects about 1.6 MW of heat per MW the steam turbine makes.
+    const stMw = plant.outputMw / 3;
+    return (
+      <div className="detail">
+        <div className="detail-head"><h3>Air-cooled condenser</h3></div>
+        <dl className="kv">
+          <div><dt>Fans running</dt><dd>18 / 18</dd></div>
+          <div><dt>Fan speed</dt><dd>{fmt(30 + 70 * load)} %</dd></div>
+          <div><dt>Heat rejected</dt><dd>{fmt(stMw * 1.6)} MW</dd></div>
+          <div><dt>Ambient air</dt><dd>{fmt(plant.ambient.temperatureC, 1)} °C</dd></div>
+        </dl>
+        <p className="note">Turns the steam turbine's exhaust back into water using air instead of a cooling tower, which saves water in West Texas.</p>
+      </div>
+    );
+  }
   if (selected === "datacenter") {
     return (
       <div className="detail">
