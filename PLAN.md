@@ -18,13 +18,16 @@ The light sensor doubles as the failure drill a judge can trigger by hand.
 ## Architecture
 
 ```
-Arduino --USB serial--> laptop bridge --HTTPS + shared secret--> API server
+Arduino --Wi-Fi, HTTPS + shared secret------------------> API server
+        (fallback) --USB serial--> laptop bridge -------^
 Android app (phone GPS) ---------------HTTPS + shared secret--> API server
 API server: ingest, simulator tick, Tiger Data writes, WebSocket fan-out
 Web app (Vercel) <---WebSocket--- API server ---WebSocket---> Android app
 ```
 
-- USB serial instead of Wi-Fi on the board. Hackathon Wi-Fi often has a captive portal that microcontrollers can't pass.
+- Board has USB-C and Wi-Fi. It posts straight to the API over Wi-Fi. If venue Wi-Fi blocks it (captive portal), the laptop bridge reads the same data over USB serial. Both paths send the same JSON, so the server doesn't care which one is live.
+- Mobile app: Expo, APK built with EAS.
+- 3D look: stylized dark control room, low-poly assets from simple shapes, glowing live values, animated power flow.
 - Every number shown is tagged real or simulated.
 - Simulator and planner compute numbers. Gemini only explains them through tool calls.
 
