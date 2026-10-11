@@ -6,7 +6,7 @@ machine_learning/
 ├── STRUCTURE.md                 # this file
 ├── requirements.txt             # scikit-learn, xgboost, shap, pandas, ...
 ├── pytest.ini                   # lets tests import src/
-├── .gitignore                   # .venv, trained models, train.log
+├── .gitignore                   # .venv, caches, train.log
 ├── .vscode/settings.json        # interpreter, pytest, notebook root
 ├── dataset/
 │   └── Predicive_Maintenance_Dataset.xlsx   # UCI AI4I 2020, 10,000 readings
@@ -24,7 +24,7 @@ machine_learning/
 │   ├── predict.py               # predict(reading) -> JSON dict; held-out example
 │   ├── input_builder.py         # Arduino readings + replay/simulated values -> six inputs
 │   └── maintenance.py           # rule-based alert levels and actions (not ML)
-├── models/                      # powerguard_bundle.joblib (git-ignored, rebuilt by train.py)
+├── models/                      # powerguard_bundle.joblib (committed; rebuilt by train.py)
 ├── reports/
 │   ├── model_evaluation.md      # method, results, limitations
 │   ├── metrics.json             # every measured number

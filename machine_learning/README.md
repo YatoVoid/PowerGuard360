@@ -70,7 +70,9 @@ pytest                  # 20 tests: cleaning, feature validation, input builder,
 ```
 
 Training is reproducible: fixed seeds; two runs give identical `metrics.json`.
-`models/` is git-ignored; run `python -m src.train` to rebuild the bundle.
+The trained bundle `models/powerguard_bundle.joblib` is committed, so `predict` works right after cloning.
+It was saved with scikit-learn 1.9.1, xgboost 3.2.0 and shap 0.51.0; if your versions differ and loading fails,
+run `python -m src.train` to rebuild it.
 
 ## Using it from the backend (FastAPI)
 

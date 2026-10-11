@@ -2,7 +2,8 @@
 __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
-# Trained models are rebuilt with: python -m src.train
+# Only the final bundle is committed; anything else in models/ stays local
 models/*
 !models/.gitkeep
+!models/powerguard_bundle.joblib
 train.log
