@@ -29,6 +29,15 @@ One laptop hosts everything. Everyone joins the same phone hotspot, which also g
   board sim
 ```
 
+Quick start on the host laptop, once `server/.env` is in place:
+
+```
+./deploy.sh            # opens the firewall ports, starts the ML service, plant server and website, forwards the USB phone, then runs Expo
+./deploy.sh --no-ml    # same without the ML service
+```
+
+Ctrl+C stops everything. Logs are in `.logs/`. The steps below are what it does, for running pieces by hand.
+
 ### 1. Host laptop
 
 Join the hotspot and find the laptop's address:
