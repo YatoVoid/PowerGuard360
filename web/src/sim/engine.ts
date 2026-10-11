@@ -43,8 +43,10 @@ export const PHONE_ENGINEER = "ENG-1";
 function initialEngineers(): Engineer[] {
   return [
     { id: PHONE_ENGINEER, name: "Phone engineer", kind: "phone", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
-    { id: "ENG-2", name: "R. Alvarez", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
-    { id: "ENG-3", name: "J. Chen", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-2", name: "Wali", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-3", name: "Sakina", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-4", name: "Anthony", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-5", name: "Chris", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
   ];
 }
 
