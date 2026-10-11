@@ -1,6 +1,6 @@
 # Firmware (Anthony, cptnomar)
 
-Read the sensors on the ESP32 and POST them to the server once a second.
+`plant_sensor/plant_sensor.ino` runs on an **Arduino UNO R4 WiFi** with a Grove Base Shield. It reads the sensors and POSTs them to the plant server twice a second. Setup, wiring and upload steps are in the main README under "Sensor board".
 
 ## What to send
 The board is GT-08's sensor package. The other seven turbines replay the AI4I 2020 dataset, so GT-08 sends the same six features in the same units:
@@ -36,7 +36,7 @@ Content-Type: application/json
 }
 ```
 
-- Send once a second. `seq` goes up by one every send.
+- The sketch sends every 500 ms. `seq` goes up by one every send.
 - Leave a reading out if the sensor fails. Never send 0 or -1 as a fake value.
 - These readings are what the dataset labels as failures, so pushing the board into one should make the model recommend maintenance on GT-08:
   - Overstrain: tool wear × torque above 11,000 (type L), 12,000 (M) or 13,000 (H).
@@ -46,7 +46,7 @@ Content-Type: application/json
 - Air quality: the first readings after the sensor connects are taken as clean air. Gas, fumes or a breath push the count up; below 70% of clean air the manager gets a "possible gas leak" recommendation for gas metering.
 
 ## Secrets
-Wi-Fi password, `SERVER_URL` and `DEVICE_TOKEN` go in `secrets.h`, which git ignores. Commit `secrets.example.h` with blank values instead.
+Wi-Fi name and password, the host address and `DEVICE_TOKEN` go in `plant_sensor/secrets.h`, which git ignores. Start from `plant_sensor/secrets.example.h`.
 
 ## Without a board
 `server/src/board-sim.ts` sends real AI4I 2020 rows in this exact format once a second, so the rest of the system can be shown without hardware.
