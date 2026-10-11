@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.pytest_cache/
+# Trained models are rebuilt with: python -m src.train
+models/*
+!models/.gitkeep
+train.log
