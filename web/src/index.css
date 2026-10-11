@@ -583,3 +583,7 @@ h1, h2, h3, h4 { margin: 0; }
 .ml-factors .up { color: var(--trip); font-variant-numeric: tabular-nums; }
 .ml-factors .down { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .ml-action { margin: 10px 0 0; padding: 9px 11px; border-left: 3px solid var(--trip); background: var(--surface-2); border-radius: 0 var(--radius-s) var(--radius-s) 0; }
+
+.dispatch { display: flex; gap: 8px; align-items: center; }
+.dispatch select { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--rule-2); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); }
+.maint-box .dispatch { margin-top: 10px; }

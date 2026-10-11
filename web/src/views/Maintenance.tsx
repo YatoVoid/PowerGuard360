@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { useCopilot } from "../copilot";
 import { assetLabel } from "../sim/site";
-import { Panel, PriorityChip, etaText, fmt, requestStatusText } from "../ui/parts";
+import { DispatchControl, Panel, PriorityChip, etaText, fmt, requestStatusText } from "../ui/parts";
 import type { MaintenanceRequest } from "../types";
 
 const ASSETS = [
@@ -13,7 +13,7 @@ const ASSETS = [
 const SHOWN = 6;
 
 const COLUMNS: { title: string; statuses: MaintenanceRequest["status"][] }[] = [
-  { title: "Needs an engineer", statuses: ["open", "dispatched"] },
+  { title: "To dispatch", statuses: ["open", "dispatched"] },
   { title: "In progress", statuses: ["en-route", "on-site", "repairing"] },
   { title: "Resolved", statuses: ["resolved", "cancelled"] },
 ];
@@ -43,6 +43,7 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
       {(r.status === "en-route" || r.status === "dispatched") && (
         <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${r.progress})` }} /></div>
       )}
+      {r.status === "open" && <DispatchControl r={r} />}
       {!done && (
         <div className="req-actions">
           {live && <button type="button" className="btn btn-quiet" onClick={() => ask(`Explain ${r.id} on ${r.asset}: what is wrong, how urgent is it, and what should the engineer bring?`, r.asset)}>Explain</button>}
@@ -72,7 +73,7 @@ function NewRequest() {
         <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={200} placeholder="For example: vibration rising since this morning" />
       </label>
       {busy && <p className="note">This asset already has an open request. Cancel it first to raise a new one.</p>}
-      <button type="submit" className="btn btn-primary" disabled={busy}>Request engineer</button>
+      <button type="submit" className="btn btn-primary" disabled={busy}>Raise request</button>
     </form>
   );
 }
@@ -126,7 +127,7 @@ export function MaintenanceView() {
         })}
       </div>
       <aside className="maint-side">
-        <Panel title="Request an engineer"><NewRequest /></Panel>
+        <Panel title="Raise a request"><NewRequest /></Panel>
         <Panel title="Engineers"><Roster /></Panel>
         <Panel title="Response">
           <dl className="kv">

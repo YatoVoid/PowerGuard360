@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPlant, forecast, PHONE_ENGINEER, REPAIR_S, ROW_SECONDS, step } from "./engine";
+import { assetPath, pathLength, routeFrom } from "./site";
 import { MODEL_METRICS, ROWS, WINDOWS, failureProbability, rowFailure, rowFeatures } from "./model";
 import type { PlantState, StepInputs } from "../types";
 
@@ -70,6 +71,7 @@ describe("maintenance", () => {
       s = step(s, { autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
       const r = s.requests.find((x) => x.asset === "GT-03");
       if (r && raisedAt < 0) raisedAt = s.t;
+      if (r && r.status === "open") s = step(s, { dispatch: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
       if (r && r.status === "dispatched" && r.engineerId === PHONE_ENGINEER) s = step(s, { accept: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
       if (r && r.status === "on-site" && r.engineerId === PHONE_ENGINEER) s = step(s, { startRepair: [r.id] });
     }
@@ -78,13 +80,46 @@ describe("maintenance", () => {
     expect(s.requests.some((x) => x.asset === "GT-03" && x.status === "resolved")).toBe(true);
   });
 
-  it("a trip raises a P1 and dispatches the phone engineer first", () => {
+  it("a trip raises a P1 that waits for the manager to dispatch someone", () => {
     let s = run(createPlant(), 5);
     s = step(s, { tripRequests: ["GT-05"] });
-    s = step(s);
+    s = run(s, 30);
     const r = s.requests.find((x) => x.asset === "GT-05")!;
     expect(r.priority).toBe("P1");
-    expect(r.engineerId).toBe(PHONE_ENGINEER);
+    expect(r.status).toBe("open");
+    expect(r.engineerId).toBeNull();
+    expect(s.engineers.every((e) => e.status === "available")).toBe(true);
+    s = step(s, { dispatch: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
+    expect(s.requests.find((x) => x.id === r.id)).toMatchObject({ status: "dispatched", engineerId: PHONE_ENGINEER });
+  });
+
+  it("won't dispatch an engineer who is already on a job", () => {
+    let s = step(createPlant(), { tripRequests: ["GT-02", "GT-05"] });
+    s = step(s);
+    const [a, b] = ["GT-02", "GT-05"].map((id) => s.requests.find((x) => x.asset === id)!.id);
+    s = step(s, { dispatch: [{ requestId: a, engineerId: PHONE_ENGINEER }] });
+    s = step(s, { dispatch: [{ requestId: b, engineerId: PHONE_ENGINEER }] });
+    expect(s.requests.find((x) => x.id === b)!.status).toBe("open");
+  });
+
+  it("an engineer already at the turbine starts there instead of walking out to the road", () => {
+    let s = step(createPlant(), { tripRequests: ["GT-05"] });
+    s = step(s);
+    const first = s.requests.find((x) => x.asset === "GT-05")!.id;
+    s = step(s, { dispatch: [{ requestId: first, engineerId: PHONE_ENGINEER }], autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
+    s = step(s, { accept: [{ requestId: first, engineerId: PHONE_ENGINEER }] });
+    for (let i = 0; i < 200 && s.requests.find((x) => x.id === first)!.status !== "on-site"; i++) s = step(s);
+    s = step(s, { startRepair: [first] });
+    for (let i = 0; i <= REPAIR_S; i++) s = step(s);
+    const at = s.engineers.find((e) => e.id === PHONE_ENGINEER)!.pos;
+    s = step(s, { newRequests: [{ asset: "GT-05", reason: "Check again" }] });
+    const again = s.requests.find((x) => x.asset === "GT-05" && x.status === "open")!;
+    s = step(s, { dispatch: [{ requestId: again.id, engineerId: PHONE_ENGINEER }] });
+    expect(pathLength(s.requests.find((x) => x.id === again.id)!.path)).toBeLessThan(1);
+    s = step(s, { accept: [{ requestId: again.id, engineerId: PHONE_ENGINEER }] });
+    s = step(s);
+    expect(s.requests.find((x) => x.id === again.id)!.status).toBe("on-site");
+    expect(s.engineers.find((e) => e.id === PHONE_ENGINEER)!.pos).toEqual(at);
   });
 
   it("the phone engineer walks only on GPS steps, then the repair fits a new tool", () => {
@@ -92,6 +127,7 @@ describe("maintenance", () => {
     s = step(s, { tripRequests: ["GT-05"] });
     s = step(s);
     const id = s.requests.find((x) => x.asset === "GT-05")!.id;
+    s = step(s, { dispatch: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
     s = step(s, { accept: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
     const before = s.requests.find((x) => x.id === id)!.progress;
     s = step(s);
@@ -113,6 +149,8 @@ describe("maintenance", () => {
     s = step(s, { newRequests: [{ asset: "switchyard", reason: "Breaker 4 alarm" }] });
     const r = s.requests.find((x) => x.asset === "switchyard")!;
     expect(r.origin).toBe("manual");
+    const crew = s.engineers.find((e) => e.kind === "sim")!.id;
+    s = step(s, { dispatch: [{ requestId: r.id, engineerId: crew }] });
     for (let i = 0; i < 300 && s.requests.find((x) => x.id === r.id)!.status !== "resolved"; i++) s = step(s);
     expect(s.requests.find((x) => x.id === r.id)!.status).toBe("resolved");
   });
@@ -216,5 +254,32 @@ describe("machine_learning service forecast", () => {
     const p = s.predictions.find((x) => x.turbineId === "GT-01")!;
     expect(tree.minutesToFailure).not.toBeNull();
     expect(p).toMatchObject({ by: "Random Forest", probability: 0.02, mode: tree.mode, minutesToFailure: tree.minutesToFailure });
+  });
+});
+
+describe("site routes", () => {
+  const stand = (asset: string) => assetPath(asset).at(-1)!;
+
+  it("from the control room follows the asset's own path", () => {
+    expect(routeFrom(assetPath("GT-03")[0], "GT-03")).toEqual(assetPath("GT-03"));
+  });
+
+  it("is empty when the engineer is already at the asset", () => {
+    expect(pathLength(routeFrom(stand("GT-04"), "GT-04"))).toBe(0);
+  });
+
+  it("from one turbine to another goes back down its own lane, along the road and up the other lane", () => {
+    const route = routeFrom(stand("GT-02"), "GT-06");
+    const lane2 = assetPath("GT-02")[3][0], lane6 = assetPath("GT-06")[3][0];
+    expect(route[1]).toEqual([lane2, -48]);
+    expect(route[2]).toEqual([lane2, 38]);
+    expect(route[3]).toEqual([lane6, 38]);
+    expect(route.at(-1)).toEqual(stand("GT-06"));
+  });
+
+  it("joins the target's path where the engineer already stands on it", () => {
+    const lane = assetPath("GT-03")[3];
+    const midLane: [number, number] = [lane[0], -10];
+    expect(routeFrom(midLane, "GT-03")).toEqual([midLane, lane, stand("GT-03")]);
   });
 });

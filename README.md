@@ -1,6 +1,6 @@
 # Power Guard 360
 
-Catches gas turbine failures in sensor data before or as they happen, and sends a maintenance engineer to fix them. The plant manager works from the website (3D plant, dashboard, maintenance board, Gemini copilot). The engineer gets the job on an Android app, walks to the asset with GPS and does the repair. Both stay in sync through the plant server.
+Catches gas turbine failures in sensor data before or as they happen and raises a maintenance request. The plant manager works from the website (3D plant, dashboard, maintenance board, Gemini copilot) and dispatches an engineer to each request; nothing is sent to an engineer until the manager does. The engineer gets the job on an Android app, walks to the asset by shaking the phone, and does the repair. Both stay in sync through the plant server.
 
 Two Random Forest models score every turbine once a second: one detects failures (calibrated risk, 78% recall at 96% precision on 2,000 unseen rows), the other names the failure type (heat dissipation, power, overstrain, tool wear). Each forecast comes with the inputs that drove it (SHAP) and a maintenance action, which the engineer sees on the job.
 
@@ -364,7 +364,7 @@ When it works, GT-08 shows "Live sensor" on the website within a second, and it 
 - Plug in the host laptop and the hotspot phone. A hotspot drains a battery fast.
 - The host's address can change if the hotspot restarts. Check `ip -4 addr` again and update the Wi-Fi phone.
 - Check the plant server printed `[ml] scoring every turbine with Random Forest`.
-- Do one full run: board simulator, GT-08 alert on the phone, Accept, walk, website updates, repair.
+- Do one full run: board simulator, GT-08 request on the maintenance board, Dispatch to the phone engineer, alert on the phone, Accept, walk, website updates, repair.
 - Backup: the Vercel link runs a local simulation when no server is reachable, so the 3D plant and dashboard still work without the hotspot.
 
 ### Showing it to someone off the hotspot

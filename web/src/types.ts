@@ -150,6 +150,7 @@ export interface StepInputs {
   resetRequests?: string[];
   // Maintenance: manual requests from the manager, and the phone engineer's actions.
   newRequests?: { asset: string; reason: string }[];
+  dispatch?: { requestId: string; engineerId: string }[];
   accept?: { requestId: string; engineerId: string }[];
   walkM?: { engineerId: string; meters: number }[];
   autoWalk?: { engineerId: string; on: boolean }[];
