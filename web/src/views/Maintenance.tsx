@@ -9,6 +9,8 @@ const ASSETS = [
   "acc", "switchyard", "gas", "battery", "datacenter",
 ];
 
+const SHOWN = 6;
+
 const COLUMNS: { title: string; statuses: MaintenanceRequest["status"][] }[] = [
   { title: "Needs an engineer", statuses: ["open", "dispatched"] },
   { title: "In progress", statuses: ["en-route", "on-site", "repairing"] },
@@ -101,7 +103,10 @@ export function MaintenanceView() {
   const t = useStore((s) => s.plant.t);
   const resolved = requests.filter((r) => r.status === "resolved");
   const avgMin = resolved.length ? resolved.reduce((s, r) => s + ((r.resolvedT ?? t) - r.createdT), 0) / resolved.length / 60 : null;
+  // Most urgent first, then newest; resolved work sorts newest first so the latest fixes stay on top.
   const sorted = [...requests].sort((a, b) => a.priority.localeCompare(b.priority) || b.createdT - a.createdT);
+  const done = (r: MaintenanceRequest) => r.status === "resolved" || r.status === "cancelled";
+  sorted.sort((a, b) => (done(a) && done(b) ? (b.resolvedT ?? b.createdT) - (a.resolvedT ?? a.createdT) : 0));
   return (
     <div className="maint">
       <div className="maint-board">
@@ -110,7 +115,8 @@ export function MaintenanceView() {
           return (
             <section key={c.title} className="maint-col" aria-label={c.title}>
               <header><h2>{c.title}</h2><span className="tab-count">{items.length}</span></header>
-              {items.length ? <ul>{items.map((r) => <RequestCard key={r.id} r={r} />)}</ul> : <p className="empty">Nothing here.</p>}
+              {items.length ? <ul>{items.slice(0, SHOWN).map((r) => <RequestCard key={r.id} r={r} />)}</ul> : <p className="empty">Nothing here.</p>}
+              {items.length > SHOWN && <p className="note">{items.length - SHOWN} older not shown.</p>}
             </section>
           );
         })}

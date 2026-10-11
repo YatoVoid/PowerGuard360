@@ -7,6 +7,7 @@ interface Toast { key: string; title: string; body: string; tone: "info" | "watc
 // Pops a notification whenever a maintenance request is raised or changes stage, the same events the phone is told about.
 export function Toasts() {
   const requests = useStore((s) => s.plant.requests);
+  const now = useStore((s) => s.plant.t);
   const engineers = useStore((s) => s.plant.engineers);
   const seen = useRef(new Map<string, MaintenanceRequest["status"]>());
   const primed = useRef(false);
@@ -18,6 +19,8 @@ export function Toasts() {
       const before = seen.current.get(r.id);
       seen.current.set(r.id, r.status);
       if (!primed.current || before === r.status) continue;
+      // A request first seen long after it was raised (page just opened, or just reconnected) is history, not news.
+      if (before === undefined && now - r.createdT > 5) continue;
       const who = engineers.find((e) => e.id === r.engineerId)?.name ?? "An engineer";
       const tone = r.priority === "P1" ? "trip" : r.priority === "P2" ? "watch" : "info";
       if (before === undefined) fresh.push({ key: `${r.id}-new`, title: `${r.priority} ${r.id}: ${r.asset}`, body: r.reason, tone });
@@ -28,11 +31,11 @@ export function Toasts() {
     }
     primed.current = true;
     if (!fresh.length) return;
-    setToasts((t) => [...fresh, ...t].slice(0, 4));
+    setToasts((t) => [...fresh, ...t].slice(0, 2));
     const keys = fresh.map((f) => f.key);
     const id = window.setTimeout(() => setToasts((t) => t.filter((x) => !keys.includes(x.key))), 6000);
     return () => window.clearTimeout(id);
-  }, [requests, engineers]);
+  }, [requests, engineers, now]);
 
   return (
     <div className="toasts" role="status" aria-live="polite">
