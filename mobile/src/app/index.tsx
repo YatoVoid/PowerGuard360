@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, G, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
@@ -5,7 +6,7 @@ import Svg, { Circle, G, Line, Polyline, Rect, Text as SvgText } from 'react-nat
 import { REPAIR_S } from '@engine/sim/engine';
 import { UNIT_X, assetLabel, pathLength } from '@engine/sim/site';
 import type { MaintenanceRequest, PlantState } from '@engine/types';
-import { ME, PHONE_GPS_SCALE, myJob, useStore } from '@/state/store';
+import { ME, SHAKE_STEP_M, myJob, useStore } from '@/state/store';
 import { Btn, KV, Panel, TopBar, st, tap } from '@/ui/parts';
 import { C, F, S, fmt } from '@/ui/theme';
 
@@ -77,9 +78,11 @@ function SiteMap({ plant, job }: { plant: PlantState; job?: MaintenanceRequest }
 
 function JobCard({ job }: { job: MaintenanceRequest }) {
   const act = useStore((s) => s.act);
-  const gps = useStore((s) => s.gps);
-  const startGps = useStore((s) => s.startGps);
-  const stopGps = useStore((s) => s.stopGps);
+  const shake = useStore((s) => s.shake);
+  const startShake = useStore((s) => s.startShake);
+  const stopShake = useStore((s) => s.stopShake);
+  // Stop listening once the walk is over, wherever that happened.
+  useEffect(() => { if (job.status !== 'en-route') stopShake(); }, [job.status, stopShake]);
   const me = useStore((s) => s.plant.engineers.find((e) => e.id === ME));
   const leftM = (1 - job.progress) * pathLength(job.path);
   return (
@@ -100,20 +103,20 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
           <KV label="Distance left on site" value={`${fmt(leftM)} m`} />
           <KV label="At walking pace" value={eta(job.etaMin - REPAIR_S / 60)} />
           <View style={[st.meter, { height: 6 }]}><View style={{ height: 6, width: `${job.progress * 100}%`, backgroundColor: C.flow }} /></View>
-          {gps ? (
-            <>
+          {shake ? (
+            <View style={styles.shakeBox}>
+              <Text style={styles.shakeBig}>{shake.status === 'unavailable' ? 'No motion sensor' : 'Shake your phone to walk'}</Text>
               <Text style={st.body}>
-                {gps.status === 'waiting' && 'Waiting for a GPS fix. Stand near a window if it takes long.'}
-                {gps.status === 'tracking' && `Tracking your steps. ${fmt(gps.walkedM)} m walked${gps.accuracyM ? `, accurate to ${fmt(gps.accuracyM)} m` : ''}.`}
-                {gps.status === 'denied' && 'Location is blocked. Allow it for Expo Go in Settings, then try again.'}
-                {gps.status === 'unavailable' && 'Location is off on this phone. Turn it on and try again.'}
+                {shake.status === 'unavailable'
+                  ? 'This phone has no accelerometer. Use auto walk instead.'
+                  : `${shake.steps} ${shake.steps === 1 ? 'stride' : 'strides'}, ${fmt(shake.steps * SHAKE_STEP_M)} m on site. The control room sees you move.`}
               </Text>
-              <Btn label="Stop GPS" onPress={stopGps} />
-            </>
+              <Btn label="Stop" onPress={stopShake} />
+            </View>
           ) : (
             <>
-              <Btn label="Walk with GPS" primary onPress={startGps} />
-              <Text style={st.small}>Each metre you walk moves you {PHONE_GPS_SCALE} m across the site.</Text>
+              <Btn label="Shake to walk" primary onPress={startShake} />
+              <Text style={st.small}>Each shake is one {SHAKE_STEP_M} m stride on site.</Text>
             </>
           )}
           <Btn
@@ -123,7 +126,7 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
         </View>
       )}
 
-      {job.status === 'on-site' && <Btn label="Start repair" primary onPress={() => { stopGps(); act({ type: 'startRepair', requestId: job.id }); }} />}
+      {job.status === 'on-site' && <Btn label="Start repair" primary onPress={() => { stopShake(); act({ type: 'startRepair', requestId: job.id }); }} />}
 
       {job.status === 'repairing' && (
         <View style={{ gap: 8 }}>
@@ -174,6 +177,8 @@ const styles = StyleSheet.create({
   prio: { minWidth: 30, height: 22, borderRadius: 3, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   prioText: { fontFamily: F.bold, fontSize: 12 },
   status: { fontFamily: F.semibold, fontSize: 16, color: C.ink, marginBottom: 12 },
+  shakeBox: { gap: 8, padding: 12, borderRadius: S.radiusS, backgroundColor: C.accentSoft, borderWidth: 1, borderColor: '#b9cff5' },
+  shakeBig: { fontFamily: F.numBold, fontSize: 18, color: C.flow },
   link: { padding: 10, borderRadius: S.radiusS, borderWidth: 1, borderColor: C.watch, backgroundColor: C.watchBg },
   histRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.surface2 },
 });
