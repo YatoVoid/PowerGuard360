@@ -1,15 +1,17 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Haptics from 'expo-haptics';
-import * as Location from 'expo-location';
+import { Accelerometer } from 'expo-sensors';
 import { Platform, Vibration } from 'react-native';
 import { create } from 'zustand';
 
-import { PHONE_ENGINEER, createPlant, haversineKm, step } from '@engine/sim/engine';
+import { PHONE_ENGINEER, createPlant, step } from '@engine/sim/engine';
 import type { MaintenanceRequest, PlantState, StepInputs } from '@engine/types';
 
-// Each metre walked with the phone moves the engineer this many metres across the site,
-// so crossing a demo room is enough to reach a turbine.
-export const PHONE_GPS_SCALE = 15;
+// Each shake is one stride on site. A few seconds of shaking crosses the plant, which suits a demo table.
+export const SHAKE_STEP_M = 12;
+// Acceleration beyond gravity, in g, that counts as a shake, and the shortest gap between two strides.
+const SHAKE_G = 0.7;
+const STRIDE_GAP_MS = 220;
 export const ME = PHONE_ENGINEER;
 
 // Over USB, `adb reverse tcp:8787 tcp:8787` makes the laptop's plant server reachable at 127.0.0.1.
@@ -26,10 +28,9 @@ export type Action =
   | { type: 'autoWalk'; engineerId: string; on: boolean }
   | { type: 'startRepair'; requestId: string };
 
-export interface Gps {
-  status: 'waiting' | 'tracking' | 'denied' | 'unavailable';
-  walkedM: number;
-  accuracyM: number | null;
+export interface Shake {
+  status: 'listening' | 'unavailable';
+  steps: number;
 }
 
 export interface Alert { requestId: string; title: string; body: string; priority: MaintenanceRequest['priority'] }
@@ -40,20 +41,20 @@ interface Store {
   alert: Alert | null;
   dismissAlert: () => void;
   selected: string | null;
-  gps: Gps | null;
+  shake: Shake | null;
   select: (id: string | null) => void;
   act: (a: Action) => void;
   trip: (id: string) => void;
   reset: (id: string) => void;
-  startGps: () => Promise<void>;
-  stopGps: () => void;
+  startShake: () => Promise<void>;
+  stopShake: () => void;
 }
 
 type Queue = Required<Pick<StepInputs, 'tripRequests' | 'resetRequests' | 'newRequests' | 'cancel' | 'accept' | 'walkM' | 'autoWalk' | 'startRepair'>>;
 const emptyQueue = (): Queue => ({ tripRequests: [], resetRequests: [], newRequests: [], cancel: [], accept: [], walkM: [], autoWalk: [], startRepair: [] });
 let queue = emptyQueue();
 let socket: WebSocket | null = null;
-let watcher: Location.LocationSubscription | null = null;
+let shakeSub: { remove: () => void } | null = null;
 
 export const useStore = create<Store>((set, get) => ({
   plant: createPlant(),
@@ -61,7 +62,7 @@ export const useStore = create<Store>((set, get) => ({
   alert: null,
   dismissAlert: () => set({ alert: null }),
   selected: null,
-  gps: null,
+  shake: null,
   select: (selected) => set({ selected }),
   act: (a) => {
     if (get().link === 'live' && socket?.readyState === WebSocket.OPEN) {
@@ -81,46 +82,28 @@ export const useStore = create<Store>((set, get) => ({
   },
   trip: (unit) => get().act({ type: 'trip', unit }),
   reset: (unit) => get().act({ type: 'reset', unit }),
-  startGps: async () => {
-    get().stopGps();
-    set({ gps: { status: 'waiting', walkedM: 0, accuracyM: null } });
-    const perm = await Location.requestForegroundPermissionsAsync().catch(() => null);
-    if (!perm || perm.status !== 'granted') { set({ gps: { status: 'denied', walkedM: 0, accuracyM: null } }); return; }
-    let last: [number, number] | null = null;
-    try {
-      watcher = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 1 },
-        (pos) => {
-          const g = get().gps;
-          if (!g) return;
-          const here: [number, number] = [pos.coords.longitude, pos.coords.latitude];
-          const acc = pos.coords.accuracy ?? 99;
-          let stepM = 0;
-          // Ignore jitter smaller than the fix's own accuracy.
-          if (last && acc < 40) {
-            const d = haversineKm(last, here) * 1000;
-            if (d > Math.max(2, acc * 0.5)) { stepM = d; last = here; }
-          } else if (!last) {
-            last = here;
-          }
-          set({ gps: { status: 'tracking', walkedM: g.walkedM + stepM, accuracyM: acc } });
-          // The server caps one step at 40 site metres, so a long stride is sent in pieces.
-          let siteM = stepM * PHONE_GPS_SCALE;
-          while (siteM > 0) {
-            const chunk = Math.min(40, siteM);
-            get().act({ type: 'walk', engineerId: ME, meters: chunk });
-            siteM -= chunk;
-          }
-        },
-      );
-    } catch {
-      set({ gps: { status: 'unavailable', walkedM: 0, accuracyM: null } });
-    }
+  startShake: async () => {
+    get().stopShake();
+    const ok = await Accelerometer.isAvailableAsync().catch(() => false);
+    if (!ok) { set({ shake: { status: 'unavailable', steps: 0 } }); return; }
+    set({ shake: { status: 'listening', steps: 0 } });
+    Accelerometer.setUpdateInterval(40);
+    let lastStride = 0;
+    shakeSub = Accelerometer.addListener(({ x, y, z }) => {
+      const now = Date.now();
+      if (Math.abs(Math.hypot(x, y, z) - 1) < SHAKE_G || now - lastStride < STRIDE_GAP_MS) return;
+      lastStride = now;
+      const sh = get().shake;
+      if (!sh) return;
+      set({ shake: { ...sh, steps: sh.steps + 1 } });
+      Haptics.selectionAsync().catch(() => {});
+      get().act({ type: 'walk', engineerId: ME, meters: SHAKE_STEP_M });
+    });
   },
-  stopGps: () => {
-    watcher?.remove();
-    watcher = null;
-    set({ gps: null });
+  stopShake: () => {
+    shakeSub?.remove();
+    shakeSub = null;
+    set({ shake: null });
   },
 }));
 
