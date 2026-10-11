@@ -189,6 +189,7 @@ const float R_MOTOR = 5.0;                   // winding resistance, ohms (multim
 const float TORQUE_FULL_NM = 0.001;          // real torque that maps to the top of the dataset range
 // From rpm: AI4I machines run at roughly constant power, so torque = power / angular speed.
 const float NOMINAL_POWER_W = 6000;
+const float PROCESS_FOLLOW = 0.02;           // share of the gap to air temp + 10 K closed each send
 
 // AI4I 2020 dataset ranges.
 const float RPM_MIN = 1168, RPM_MAX = 2886;
@@ -200,7 +201,7 @@ const float TOOL_WEAR_MAX = 253;
 WiFiClient client;
 SPL07_003 baro;
 bool baroOk = false;
-float airBaseK = NAN;
+float processK = NAN;
 unsigned long seq = 0;
 float toolWearMin = 0;
 unsigned long lastSend = 0, lastSample = 0, lastWifiTry = 0, pausedUntil = 0;
@@ -328,10 +329,11 @@ void loop() {
   if (rpm > 0) toolWearMin = fminf(toolWearMin + dtSec, TOOL_WEAR_MAX);  // demo time: 1 s = 1 min
 
   float airK = baroOk ? baro.readTemperature() + 273.15f : 298.0f;
-  if (isnan(airBaseK)) airBaseK = airK;
-  // Process temp follows the starting air temp plus load heating: pinching the barometer
-  // raises air temp, the gap shrinks, and at low rpm that is a heat dissipation failure.
-  float processK = airBaseK + 10 + (torqueNm * rpm * 2 * PI / 60 - 6000) / 3000;
+  // Process temp heads for air temp + 10 K plus load heating, but lags like a machine's thermal mass
+  // (2% of the way per 500 ms send, ~25 s to catch up). A quick pinch on the barometer raises air temp
+  // faster than process temp follows, so the gap shrinks for a few seconds: a heat dissipation warning.
+  float targetK = airK + 10 + (torqueNm * rpm * 2 * PI / 60 - 6000) / 3000;
+  processK = isnan(processK) ? targetK : processK + (targetK - processK) * PROCESS_FOLLOW;
 
   String body = String("{\"device\":\"plant-sensor-1\",\"seq\":") + seq++ +
     ",\"uptime_ms\":" + millis() +
