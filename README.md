@@ -443,13 +443,6 @@ The board doesn't have to send all six readings. Whatever it sends drives GT-08 
 
 When it works, GT-08 shows "Live sensor" on the website within a second, and readings the model flags show up as a maintenance recommendation for GT-08.
 
-### Before judging
-
-- Plug in the host laptop and the hotspot phone. A hotspot drains a battery fast.
-- The host's address can change if the hotspot restarts. Check `ip -4 addr` again and update the Wi-Fi phone.
-- Check the plant server printed `[ml] scoring every turbine with Random Forest`.
-- Do one full run: `npm run board -- PWF`, GT-08 recommendation on the maintenance board, edit what to check, Request maintenance, Dispatch to the phone engineer, alert on the phone, Accept, walk, website updates, repair.
-- Backup: the Vercel link runs a local simulation when no server is reachable, so the 3D plant and dashboard still work without the hotspot.
 
 ### Showing it to someone off the hotspot
 
