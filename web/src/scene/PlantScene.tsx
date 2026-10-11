@@ -513,6 +513,8 @@ const GAS_BOXES: BoxSpec[] = [
 ];
 
 function GasSupply() {
+  const gas = useStore((s) => s.plant.gas);
+  const tone = !gas.connected ? "tag-muted" : gas.level === "poor" ? "tag-tripped" : gas.level === "reduced" ? "tag-watch" : "tag-muted";
   return (
     <Selectable id="gas">
     <group>
@@ -523,7 +525,10 @@ function GasSupply() {
       {/* metering station where the pipeline enters */}
       <Merged boxes={GAS_BOXES} />
       <Tag position={[118, 9, -34]} center zIndexRange={[10, 0]}>
-        <Label id="gas" className="tag-muted"><strong>Gas metering</strong></Label>
+        <Label id="gas" className={tone}>
+          <strong>Gas metering</strong>
+          {gas.connected && gas.qualityPct !== null && <em className="tag-live is-on">{gas.level === "poor" ? `air ${gas.qualityPct}%, possible leak` : `air quality ${gas.qualityPct}%`}</em>}
+        </Label>
       </Tag>
     </group>
     </Selectable>

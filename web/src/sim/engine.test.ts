@@ -290,3 +290,46 @@ describe("site routes", () => {
     expect(routeFrom(midLane, "GT-03")).toEqual([midLane, lane, stand("GT-03")]);
   });
 });
+
+describe("gas metering air quality", () => {
+  const air = (raw: number) => ({ device: "b", seq: 1, uptime_ms: 1, readings: { air_quality_raw: raw } });
+  const feed = (s: PlantState, raws: number[], startMs: number) => {
+    raws.forEach((raw, i) => { s = step(s, { sensor: air(raw), sensorAtMs: startMs + i * 1000, nowMs: startMs + i * 1000 }); });
+    return s;
+  };
+
+  it("learns clean air, then flags a breath on the sensor as a possible leak", () => {
+    let s = feed(createPlant(), Array(10).fill(1600), 1000);
+    expect(s.gas).toMatchObject({ connected: true, level: "good", qualityPct: 100 });
+    expect(s.recommendations).toHaveLength(0);
+    s = feed(s, [3000, 3100], 11000);
+    expect(s.gas.level).toBe("poor");
+    expect(s.gas.qualityPct).toBeLessThan(60);
+    const rec = s.recommendations.find((r) => r.asset === "gas")!;
+    expect(rec).toMatchObject({ status: "pending", by: "Air quality sensor" });
+    expect(rec.detail).toMatch(/possible gas leak/);
+    expect(s.events.some((e) => e.asset === "gas" && /down to/.test(e.text))).toBe(true);
+  });
+
+  it("does not learn the leak as clean air", () => {
+    let s = feed(createPlant(), Array(10).fill(1600), 1000);
+    s = feed(s, Array(60).fill(3000), 11000);
+    expect(s.gas.baseline).toBeCloseTo(1600, 0);
+    expect(s.gas.level).toBe("poor");
+  });
+
+  it("recovers when the air clears and the request goes through the normal flow", () => {
+    let s = feed(createPlant(), Array(10).fill(1600), 1000);
+    s = feed(s, [3000], 11000);
+    const rec = s.recommendations.find((r) => r.asset === "gas")!;
+    s = step(s, { sensor: air(1600), sensorAtMs: 12000, nowMs: 12000, review: [{ recommendationId: rec.id, decision: "request", note: "" }] });
+    expect(s.gas.level).toBe("good");
+    expect(s.requests[0]).toMatchObject({ asset: "gas", origin: "model", reason: rec.action });
+  });
+
+  it("shows no sensor once the posts stop", () => {
+    let s = feed(createPlant(), Array(10).fill(1600), 1000);
+    s = step(s, { nowMs: 40000 });
+    expect(s.gas.connected).toBe(false);
+  });
+});

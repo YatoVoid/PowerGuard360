@@ -109,10 +109,10 @@ function Recommendations() {
   const pending = recs.filter((r) => r.status === "pending").sort((a, b) => b.risk - a.risk);
   const declined = recs.filter((r) => r.status === "declined").slice(-3).reverse();
   return (
-    <section className="maint-col" aria-label="Model recommends">
-      <header><h2>Model recommends</h2><span className="tab-count">{pending.length}</span></header>
+    <section className="maint-col" aria-label="Recommended maintenance">
+      <header><h2>Recommended</h2><span className="tab-count">{pending.length}</span></header>
       {pending.length ? <div className="rec-list">{pending.map((r) => <RecommendationCard key={r.id} rec={r} />)}</div>
-        : <p className="empty">No unit needs maintenance right now. The model checks every turbine once a second.</p>}
+        : <p className="empty">Nothing needs maintenance right now. The model checks every turbine and the air sensor watches gas metering, once a second.</p>}
       {declined.length > 0 && (
         <ul className="rec-declined" aria-label="Recently declined">
           {declined.map((r) => <li key={r.id}>{r.id} {r.asset}: declined</li>)}

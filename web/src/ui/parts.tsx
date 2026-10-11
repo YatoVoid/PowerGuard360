@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
-import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
+import { GAS_ALERT_PCT, GAS_WARMUP_SAMPLES, LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
 import { FAILURE_NAME, modelNote } from "../sim/model";
 import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Recommendation, Source, Turbine } from "../types";
 import { assetLabel, pathLength, routeFrom } from "../sim/site";
@@ -202,7 +202,7 @@ export function RecommendationCard({ rec, compact = false }: { rec: Recommendati
         {compact ? <strong>{rec.id}</strong> : (
           <>
             <strong>{rec.id}</strong>
-            <button type="button" className="link" onClick={() => { select(rec.asset); setView("twin"); }}>{rec.asset}</button>
+            <button type="button" className="link" onClick={() => { select(rec.asset); setView("twin"); }}>{rec.asset.startsWith("GT-") ? rec.asset : assetLabel(rec.asset)}</button>
           </>
         )}
         <span className="req-origin">{Math.round(rec.risk * 100)}% risk</span>
@@ -220,7 +220,7 @@ export function RecommendationCard({ rec, compact = false }: { rec: Recommendati
           <button type="submit" className="btn btn-primary">Request maintenance</button>
         </div>
       </form>
-      <p className="hint">{rec.by} recommendation. Declining keeps {rec.asset} quiet for 3 minutes.</p>
+      <p className="hint">{rec.by} recommendation. Declining keeps {rec.asset.startsWith("GT-") ? rec.asset : assetLabel(rec.asset)} quiet for 3 minutes.</p>
     </article>
   );
 }
@@ -400,6 +400,43 @@ function MaintenanceBox({ asset }: { asset: string }) {
   );
 }
 
+const GAS_LEVEL_TEXT = { good: "Good", reduced: "Reduced", poor: "Poor, possible leak" } as const;
+
+function GasDetail() {
+  const gas = useStore((s) => s.plant.gas);
+  const history = gas.history.filter((v) => Number.isFinite(v));
+  const warming = gas.connected && gas.samples <= GAS_WARMUP_SAMPLES;
+  return (
+    <div className="detail">
+      <div className="detail-head">
+        <h3>Gas metering</h3>
+        {gas.connected && gas.level && <span className={`status status-plain ${gas.level === "poor" ? "status-tripped" : gas.level === "reduced" ? "status-watch" : ""}`}>{warming ? "Learning clean air" : GAS_LEVEL_TEXT[gas.level]}</span>}
+      </div>
+      <p className="note">Pipeline gas is measured here before it reaches the turbines. An air quality sensor next to the skid watches for leaks.</p>
+      {gas.connected && gas.qualityPct !== null ? (
+        <>
+          <div className="sensor-head">
+            <h4 className="sub">Air quality</h4>
+            <SourceTag source="live" />
+          </div>
+          <p className={`gas-reading gas-${gas.level}`}>{gas.qualityPct}<span>% of clean air</span></p>
+          <div className="trend-row">
+            <span>Last 3 min (leak alert below {GAS_ALERT_PCT}%)</span>
+            <Spark values={history} lo={0} hi={100} warn={GAS_ALERT_PCT} />
+          </div>
+          <dl className="kv">
+            <div><dt>Sensor reading</dt><dd>{fmt(gas.raw ?? 0)}</dd></div>
+            <div><dt>Clean-air level</dt><dd>{fmt(gas.baseline ?? 0)}</dd></div>
+          </dl>
+          <p className="note">The first seconds after the sensor connects set the clean-air level. Gas or fumes push the reading above it, and below {GAS_ALERT_PCT}% the manager gets a maintenance recommendation to check for a leak.</p>
+        </>
+      ) : (
+        <p className="note">No air quality sensor connected. It reports through the sensor board.</p>
+      )}
+    </div>
+  );
+}
+
 function AssetBody() {
   const selected = useStore((s) => s.selected);
   const plant = useStore((s) => s.plant);
@@ -442,14 +479,7 @@ function AssetBody() {
       </div>
     );
   }
-  if (selected === "gas") {
-    return (
-      <div className="detail">
-        <div className="detail-head"><h3>Gas metering</h3></div>
-        <p className="note">Pipeline gas is measured here before it reaches the turbines. The dataset has no gas readings, so this asset has no live values yet.</p>
-      </div>
-    );
-  }
+  if (selected === "gas") return <GasDetail />;
   if (selected === "acc") {
     return (
       <div className="detail">
