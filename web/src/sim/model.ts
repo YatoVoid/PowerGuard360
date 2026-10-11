@@ -1,6 +1,6 @@
 import data from "../data/ai4i.json";
 import model from "../data/model.json";
-import type { FailureMode, Features, MachineType, PlantState } from "../types";
+import type { FailureMode, Features, MachineType } from "../types";
 
 // Limits taken from how the AI4I 2020 dataset generates each failure mode.
 export const OSF_LIMIT: Record<MachineType, number> = { L: 11000, M: 12000, H: 13000 };
@@ -18,27 +18,13 @@ export const FAILURE_NAME: Record<FailureMode, string> = {
   RNF: "Random failure",
 };
 
-// Same wording as machine_learning/src/maintenance.py, so a tripped unit still tells the engineer what to check
-// after it drops out of the model's scoring.
+// Same wording as machine_learning/src/maintenance.py, for when the ML service is down and the tree flags a unit.
 export const FAILURE_ACTION: Partial<Record<FailureMode, string>> = {
   TWF: "Replace the worn tool and reset the tool-wear counter.",
   HDF: "Inspect cooling: fans, airflow and heat exchangers. The process/air temperature gap is too small.",
   PWF: "Inspect motor and power supply. Power draw is outside the safe operating window.",
   OSF: "Reduce load and replace the tool. Torque on a worn tool is overstraining the equipment.",
 };
-
-// What an engineer sent to this asset should check: the model's action while it is flagging the unit,
-// otherwise the action for the failure it tripped on or is forecast to have.
-export function whatToCheck(plant: PlantState, asset: string): string | null {
-  const pred = plant.predictions.find((p) => p.turbineId === asset);
-  const diag = plant.turbines.find((t) => t.id === asset)?.diagnosis;
-  if (diag?.failureClass && diag.types.length) return diag.action;
-  if (pred?.ml && (pred.ml.alertLevel === "Alert" || pred.ml.alertLevel === "Critical")) return pred.ml.action;
-  const cause = plant.turbines.find((t) => t.id === asset)?.tripCause;
-  const tripped = (Object.keys(FAILURE_NAME) as FailureMode[]).find((m) => FAILURE_NAME[m] === cause);
-  const mode = tripped ?? pred?.mode ?? null;
-  return (mode && FAILURE_ACTION[mode]) ?? null;
-}
 
 const TYPES: MachineType[] = ["L", "M", "H"];
 // [type, airK, processK, rpm, torque, wearMin, fail, TWF, HDF, PWF, OSF, RNF]

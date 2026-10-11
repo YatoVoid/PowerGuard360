@@ -465,7 +465,7 @@ h1, h2, h3, h4 { margin: 0; }
 .maint-mini li span:last-child { color: var(--ink-2); font-size: 13px; text-align: right; }
 
 .maint { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100%; }
-.maint-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); padding: var(--gutter); overflow-y: auto; align-items: start; }
+.maint-board { display: grid; grid-template-columns: minmax(280px, 1.3fr) repeat(3, minmax(0, 1fr)); gap: var(--gap); padding: var(--gutter); overflow-y: auto; align-items: start; }
 .maint-col header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .maint-col h2 { font-size: 13px; font-weight: 600; }
 .maint-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -489,6 +489,9 @@ h1, h2, h3, h4 { margin: 0; }
 .roster span { font-size: 12px; color: var(--ink-2); }
 
 
+@media (max-width: 1300px) {
+  .maint-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 1100px) {
   .maint { grid-template-columns: minmax(0, 1fr); height: auto; }
   .maint-side { padding: 0 var(--gutter) var(--gutter); }
@@ -587,3 +590,20 @@ h1, h2, h3, h4 { margin: 0; }
 .dispatch { display: flex; gap: 8px; align-items: center; }
 .dispatch select { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--rule-2); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); }
 .maint-box .dispatch { margin-top: 10px; }
+
+/* model recommendations waiting on the manager */
+.rec-list { display: grid; gap: 8px; }
+.rec { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 12px 14px; display: grid; gap: 6px; box-shadow: inset 3px 0 0 var(--accent); }
+.rec-p1 { box-shadow: inset 3px 0 0 var(--trip); }
+.rec-p2 { box-shadow: inset 3px 0 0 var(--watch); }
+.maint-box .rec { margin-top: 4px; }
+.rec .prio { min-width: 0; }
+.rec-types { margin: 0; font-size: 13px; color: var(--ink-2); }
+.rec .ml-factors { margin: 0; }
+.rec-form { display: grid; gap: 4px; margin-top: 4px; }
+.rec-form label { font-size: 12px; color: var(--ink-2); }
+.rec-form textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--rule-2); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); width: 100%; resize: vertical; }
+.rec-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.rec .hint { margin: 0; }
+.rec-declined { list-style: none; margin: 10px 0 0; padding: 0; font-size: 12px; color: var(--ink-3); display: grid; gap: 2px; }
+.req-basis { margin: 0; font-size: 12px; color: var(--ink-2); }

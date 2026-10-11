@@ -11,6 +11,8 @@ export const Action = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cancel"), requestId: id }),
   // The manager sends a chosen engineer to an open request. Nothing is dispatched without this.
   z.object({ type: z.literal("dispatch"), requestId: id, engineerId: id }),
+  // The manager's answer to a model recommendation, with their notes on what the engineer should check.
+  z.object({ type: z.literal("review"), recommendationId: id, decision: z.enum(["request", "decline"]), note: z.string().max(200).default("") }),
   z.object({ type: z.literal("accept"), requestId: id, engineerId: id }),
   // One GPS step from the phone, already scaled to site metres. Capped so a jump in the fix can't teleport anyone.
   z.object({ type: z.literal("walk"), engineerId: id, meters: z.number().min(0).max(40) }),

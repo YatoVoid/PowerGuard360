@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { useCopilot } from "../copilot";
 import { assetLabel } from "../sim/site";
-import { DispatchControl, Panel, PriorityChip, etaText, fmt, requestStatusText } from "../ui/parts";
+import { DispatchControl, Panel, PriorityChip, RecommendationCard, etaText, fmt, requestStatusText } from "../ui/parts";
 import type { MaintenanceRequest } from "../types";
 
 const ASSETS = [
@@ -32,9 +32,10 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
         <PriorityChip p={r.priority} />
         <strong>{r.id}</strong>
         <button type="button" className="link" onClick={() => { select(r.asset); setView("twin"); }}>{r.asset.startsWith("GT-") ? r.asset : assetLabel(r.asset)}</button>
-        <span className="req-origin">{r.origin === "auto" ? "Sensors" : "Manual"}</span>
+        <span className="req-origin">{r.origin === "model" ? "Model advice" : "Manual"}</span>
       </div>
       <p className="req-reason">{r.reason}</p>
+      {r.basis && <p className="req-basis">Model: {r.basis.detail}</p>}
       <div className="req-meta">
         <span>{requestStatusText(r)}</span>
         {engineer && <span>{engineer.name}</span>}
@@ -103,6 +104,24 @@ function Roster() {
   );
 }
 
+function Recommendations() {
+  const recs = useStore((s) => s.plant.recommendations);
+  const pending = recs.filter((r) => r.status === "pending").sort((a, b) => b.risk - a.risk);
+  const declined = recs.filter((r) => r.status === "declined").slice(-3).reverse();
+  return (
+    <section className="maint-col" aria-label="Model recommends">
+      <header><h2>Model recommends</h2><span className="tab-count">{pending.length}</span></header>
+      {pending.length ? <div className="rec-list">{pending.map((r) => <RecommendationCard key={r.id} rec={r} />)}</div>
+        : <p className="empty">No unit needs maintenance right now. The model checks every turbine once a second.</p>}
+      {declined.length > 0 && (
+        <ul className="rec-declined" aria-label="Recently declined">
+          {declined.map((r) => <li key={r.id}>{r.id} {r.asset}: declined</li>)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function MaintenanceView() {
   const requests = useStore((s) => s.plant.requests);
   const t = useStore((s) => s.plant.t);
@@ -115,6 +134,7 @@ export function MaintenanceView() {
   return (
     <div className="maint">
       <div className="maint-board">
+        <Recommendations />
         {COLUMNS.map((c) => {
           const items = sorted.filter((r) => c.statuses.includes(r.status));
           return (

@@ -1,10 +1,10 @@
 import type {
-  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, RemotePrediction, Severity, StepInputs, Turbine,
+  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Recommendation, RemotePrediction, Severity, StepInputs, Turbine,
 } from "../types";
 import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
 import {
-  FAILURE_NAME, HDF_GAP_K, HDF_RPM, OSF_LIMIT, PWF_MAX_W, PWF_MIN_W, TWF_PER_ROW, TWF_WEAR_MIN, WINDOWS,
-  failureProbability, rowFailure, rowFeatures, shaftPowerW,
+  FAILURE_ACTION, FAILURE_NAME, OSF_LIMIT, TWF_PER_ROW, TWF_WEAR_MIN, WINDOWS,
+  failureProbability, rowFeatures, shaftPowerW,
 } from "./model";
 
 // Machine readings come from the AI4I 2020 dataset (see data/README.md). Only power demand and turbine
@@ -21,8 +21,6 @@ const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 15000;
 // The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
 export const REMOTE_STALE_MS = 15000;
-// Raise a P3 request when a failure is forecast within this many minutes.
-export const REQUEST_LEAD_MIN = 2;
 export const WATCH_RISK = 0.5;
 // Torque spread across the dataset, used to judge the chance that the next cut overstrains the tool.
 const TORQUE_MEAN = 40;
@@ -36,9 +34,13 @@ export const WALK_M_PER_S = 1.3;
 export const SITE_REPLAY_SPEED = 5;
 export const REPAIR_S = 25;
 const SIM_ACCEPT_S = 4;
-// After a fix, give the readings time to settle before the forecast can raise a new request.
+// After a fix, give the readings time to settle before the model can recommend the unit again.
 const FIX_COOLDOWN_S = 120;
-const PRIORITY_RANK: Record<Priority, number> = { P1: 0, P2: 1, P3: 2 };
+// After the manager declines, the same unit stays quiet this long.
+const DECLINE_QUIET_S = 180;
+const RECOMMENDATION_LEN = 40;
+const PRIORITY_FOR: Record<Recommendation["alertLevel"], Priority> = { Critical: "P1", Alert: "P2", Watch: "P3", Normal: "P3" };
+const GENERAL_ACTION = "Run a general inspection. The model flags failure risk but no specific failure mode.";
 
 export const PHONE_ENGINEER = "ENG-1";
 function initialEngineers(): Engineer[] {
@@ -235,6 +237,7 @@ export function createPlant(seed = 7): PlantState {
     board: { source: "sim", lastSeenMs: null, features: null },
     engineers: initialEngineers(),
     requests: [],
+    recommendations: [],
     predictions: [],
     events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the sensor board when it is connected` }],
     history: [],
@@ -285,13 +288,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
           tb.row = start;
           log("info", tb.id, `${tb.id} tool changed at end of life, wear back to ${Math.round(rowFeatures(start).toolWearMin)} min`);
         }
-        // With the board connected the recorded label no longer matches the readings, so only the live rules below can trip it.
-        const failure = liveBoard ? null : rowFailure(tb.row);
+        // Recorded failures don't trip the unit; the model sees them coming and recommends maintenance.
         tb.features = rowFeatures(tb.row);
-        if (failure) {
-          tb.status = "tripped"; tb.tripCause = FAILURE_NAME[failure]; tb.outputMw = 0;
-          log("trip", tb.id, `${tb.id} tripped: ${FAILURE_NAME[failure].toLowerCase()} (dataset row ${tb.row + 1})`);
-        }
       }
     }
     tb.measured = liveBoard ? (Object.keys(liveBoard).filter((k) => k !== "type") as (keyof Features)[]) : [];
@@ -300,20 +298,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     wearRate[tb.id] = grew > 0 && grew < 20 ? grew : WEAR_PER_ROW;
     tb.shaftPowerKw = shaftPowerW(tb.features) / 1000;
     tb.capacityMw = tb.ratedMw * derateFactor(tb.features.airTempK);
-  }
-
-  // Live board: trip on the same rules the dataset uses to label failures.
-  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT && x.source === "live");
-  if (live && (live.status === "running" || live.status === "watch")) {
-    const f = live.features;
-    const w = shaftPowerW(f);
-    const mode = f.toolWearMin * f.torqueNm > OSF_LIMIT[f.type] ? "OSF"
-      : f.processTempK - f.airTempK < HDF_GAP_K && f.rpm < HDF_RPM ? "HDF"
-      : w < PWF_MIN_W || w > PWF_MAX_W ? "PWF" : null;
-    if (mode) {
-      live.status = "tripped"; live.tripCause = FAILURE_NAME[mode]; live.outputMw = 0;
-      log("trip", live.id, `${live.id} tripped: ${FAILURE_NAME[mode].toLowerCase()} on live sensor readings`);
-    }
   }
 
   const remoteFresh = inputs.remote && inputs.remoteAtMs !== undefined && (inputs.nowMs ?? 0) - inputs.remoteAtMs < REMOTE_STALE_MS;
@@ -380,9 +364,9 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const openFor = (asset: string) => requests.find((r) => r.asset === asset && active(r));
   const recentlyFixed = (asset: string) =>
     requests.some((r) => r.asset === asset && r.status === "resolved" && r.resolvedT !== null && t - r.resolvedT < FIX_COOLDOWN_S);
-  const create = (asset: string, reason: string, priority: Priority, origin: "auto" | "manual") => {
+  const create = (asset: string, reason: string, priority: Priority, origin: MaintenanceRequest["origin"], basis: MaintenanceRequest["basis"] = null) => {
     const r: MaintenanceRequest = {
-      id: `MR-${101 + requests.length}`, asset, reason, priority, origin, status: "open", createdT: t,
+      id: `MR-${101 + requests.length}`, asset, reason, priority, origin, basis, status: "open", createdT: t,
       engineerId: null, dispatchedT: null, path: [], progress: 0, etaMin: 0, repairLeftS: REPAIR_S, resolvedT: null,
     };
     requests.push(r);
@@ -396,20 +380,50 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     create(m.asset, m.reason.trim() || "Inspection requested by the control room", "P2", "manual");
   }
 
-  for (const tb of turbines) {
-    let priority: Priority | null = null;
-    let reason = "";
-    const pred = predictions.find((p) => p.turbineId === tb.id);
-    if (tb.status === "tripped") { priority = "P1"; reason = `Tripped: ${(tb.tripCause ?? "unknown cause").toLowerCase()}`; }
-    else if (tb.status === "watch" && pred) { priority = "P2"; reason = pred.detail; }
-    else if (pred && pred.minutesToFailure !== null && pred.minutesToFailure <= REQUEST_LEAD_MIN && !recentlyFixed(tb.id)) { priority = "P3"; reason = pred.detail; }
-    if (!priority) continue;
-    const existing = openFor(tb.id);
-    if (!existing) create(tb.id, reason, priority, "auto");
-    else if (PRIORITY_RANK[priority] < PRIORITY_RANK[existing.priority]) {
-      existing.priority = priority; existing.reason = reason;
-      log(priority === "P1" ? "trip" : "watch", tb.id, `${existing.id} raised to ${priority}: ${reason}`);
+  const recommendations = prev.recommendations.map((r) => ({ ...r }));
+  for (const v of inputs.review ?? []) {
+    const rec = recommendations.find((r) => r.id === v.recommendationId && r.status === "pending");
+    if (!rec) continue;
+    rec.decidedT = t;
+    if (v.decision === "decline") {
+      rec.status = "declined";
+      log("info", rec.asset, `${rec.id} declined: no maintenance on ${rec.asset} for now`);
+      continue;
     }
+    const existing = openFor(rec.asset);
+    const note = v.note.trim() || rec.action;
+    const req = existing ?? create(rec.asset, note, PRIORITY_FOR[rec.alertLevel], "model", {
+      risk: rec.risk, types: rec.types.map((x) => x.name), detail: rec.detail,
+    });
+    rec.status = "requested"; rec.requestId = req.id;
+  }
+
+  // The model flags a unit: recommend maintenance once, keep it current while it waits for the manager.
+  for (const tb of turbines) {
+    const pred = predictions.find((p) => p.turbineId === tb.id);
+    if (!pred || !(pred.ml ? pred.ml.failureClass === 1 : pred.risk >= WATCH_RISK)) continue;
+    if (openFor(tb.id) || recentlyFixed(tb.id)) continue;
+    const pending = recommendations.find((r) => r.asset === tb.id && r.status === "pending");
+    const declinedT = Math.max(-Infinity, ...recommendations.filter((r) => r.asset === tb.id && r.status === "declined").map((r) => r.decidedT ?? 0));
+    if (!pending && t - declinedT < DECLINE_QUIET_S) continue;
+    const ml = pred.ml;
+    const fields = {
+      updatedT: t,
+      risk: pred.risk,
+      alertLevel: ml?.alertLevel ?? (pred.risk >= 0.8 ? "Critical" as const : "Alert" as const),
+      detail: pred.detail,
+      by: pred.by,
+      types: ml ? ml.types : pred.mode ? [{ code: pred.mode, name: FAILURE_NAME[pred.mode], probability: pred.risk }] : [],
+      factors: ml?.factors ?? null,
+      action: ml?.action ?? (pred.mode && FAILURE_ACTION[pred.mode]) ?? GENERAL_ACTION,
+    };
+    if (pending) {
+      if (pred.risk >= pending.risk) Object.assign(pending, fields);
+      continue;
+    }
+    const rec: Recommendation = { id: `RC-${101 + recommendations.length}`, asset: tb.id, createdT: t, ...fields, status: "pending", decidedT: null, requestId: null };
+    recommendations.push(rec);
+    log("watch", tb.id, `${rec.id} maintenance recommended for ${tb.id}: ${rec.detail}`);
   }
 
   for (const id of inputs.cancel ?? []) {
@@ -509,6 +523,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     board,
     engineers,
     requests,
+    recommendations: recommendations.slice(-RECOMMENDATION_LEN),
     predictions,
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],

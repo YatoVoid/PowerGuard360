@@ -118,6 +118,7 @@ export interface PlantState {
   board: Board;
   engineers: Engineer[];
   requests: MaintenanceRequest[];
+  recommendations: Recommendation[];
   predictions: Prediction[];
   events: PlantEvent[];
   history: HistoryPoint[];
@@ -151,6 +152,8 @@ export interface StepInputs {
   // Maintenance: manual requests from the manager, and the phone engineer's actions.
   newRequests?: { asset: string; reason: string }[];
   dispatch?: { requestId: string; engineerId: string }[];
+  // The manager's answer to a recommendation: request maintenance with notes on what to check, or decline.
+  review?: { recommendationId: string; decision: "request" | "decline"; note: string }[];
   accept?: { requestId: string; engineerId: string }[];
   walkM?: { engineerId: string; meters: number }[];
   autoWalk?: { engineerId: string; on: boolean }[];
@@ -166,7 +169,10 @@ export interface MaintenanceRequest {
   asset: string;
   reason: string;
   priority: Priority;
-  origin: "auto" | "manual";
+  // "model" = the manager accepted a model recommendation; "manual" = raised by the manager directly.
+  origin: "model" | "manual";
+  // Why the model flagged it, carried onto the job so the engineer sees it next to the manager's notes.
+  basis?: { risk: number; types: string[]; detail: string } | null;
   status: RequestStatus;
   createdT: number;
   engineerId: string | null;
@@ -176,6 +182,26 @@ export interface MaintenanceRequest {
   etaMin: number;
   repairLeftS: number;
   resolvedT: number | null;
+}
+
+export type RecommendationStatus = "pending" | "requested" | "declined";
+
+// The model thinks a unit needs maintenance. Nothing happens until the manager requests or declines it.
+export interface Recommendation {
+  id: string;
+  asset: string;
+  createdT: number;
+  updatedT: number;
+  risk: number;
+  alertLevel: MlDiagnosis["alertLevel"];
+  detail: string;
+  by: string;
+  types: { code: FailureMode; name: string; probability: number }[];
+  factors: MlDiagnosis["factors"];
+  action: string;
+  status: RecommendationStatus;
+  decidedT: number | null;
+  requestId: string | null;
 }
 
 export type EngineerStatus = "available" | "dispatched" | "walking" | "on-site" | "repairing";
