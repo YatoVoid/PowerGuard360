@@ -40,6 +40,24 @@ export const SensorReading = z.object({
 });
 export type SensorReading = z.infer<typeof SensorReading>;
 
+const RANGES: Record<string, [number, number]> = {
+  air_temp_k: [250, 350], process_temp_k: [250, 400], rpm: [0, 5000], torque_nm: [0, 200], tool_wear_min: [0, 500],
+};
+
+// A glitching sensor shouldn't cost the whole post: drop just the reading that's out of range or not a number.
+export function dropBadReadings(json: unknown): { json: unknown; dropped: string[] } {
+  const readings = (json as { readings?: Record<string, unknown> } | null)?.readings;
+  if (!readings || typeof readings !== "object") return { json, dropped: [] };
+  const dropped: string[] = [];
+  const kept: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(readings)) {
+    const range = RANGES[k];
+    if (range && !(typeof v === "number" && Number.isFinite(v) && v >= range[0] && v <= range[1])) dropped.push(`${k}=${JSON.stringify(v)}`);
+    else kept[k] = v;
+  }
+  return { json: { ...(json as object), readings: kept }, dropped };
+}
+
 // What the ML laptop posts after scoring the board's readings. It overrides the decision tree for that unit.
 const printable = /^[^\u0000-\u001f\u007f<>]*$/;
 export const RemotePrediction = z.object({

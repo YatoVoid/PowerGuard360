@@ -27,14 +27,17 @@ export interface Turbine {
   shaftPowerKw: number;
   // "live" when the features come from the sensor board, "sim" when replayed from the dataset.
   source: Source;
-  // Dataset row being replayed, or null while live.
+  // Dataset row being replayed. GT-08 keeps replaying underneath the board so anything it doesn't send still has a value.
   row: number | null;
+  // Readings measured by the sensor board right now; the rest come from the dataset row.
+  measured: (keyof Features)[];
 }
 
 export interface Board {
   source: Source;
   lastSeenMs: number | null;
-  features: Features | null;
+  // Only what the board sent in its latest post.
+  features: Partial<Features> | null;
 }
 
 export interface Battery {

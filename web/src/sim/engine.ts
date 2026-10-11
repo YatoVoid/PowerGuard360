@@ -17,7 +17,8 @@ export const ROW_SECONDS = 8;
 const HISTORY_LEN = 300;
 const RISK_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
-const SENSOR_STALE_MS = 5000;
+// Wi-Fi on a small board drops a post now and then; only call it offline after a real silence.
+const SENSOR_STALE_MS = 15000;
 // The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
 const REMOTE_STALE_MS = 15000;
 // Raise a P3 request when a failure is forecast within this many minutes.
@@ -32,7 +33,7 @@ const WEAR_PER_ROW = 2.5;
 export const LIVE_SENSOR_UNIT = "GT-08";
 // Walking pace on site, replayed faster for the demo.
 export const WALK_M_PER_S = 1.3;
-export const SITE_REPLAY_SPEED = 3;
+export const SITE_REPLAY_SPEED = 5;
 export const REPAIR_S = 25;
 const SIM_ACCEPT_S = 4;
 // After a fix, give the readings time to settle before the forecast can raise a new request.
@@ -43,8 +44,10 @@ export const PHONE_ENGINEER = "ENG-1";
 function initialEngineers(): Engineer[] {
   return [
     { id: PHONE_ENGINEER, name: "Phone engineer", kind: "phone", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
-    { id: "ENG-2", name: "R. Alvarez", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
-    { id: "ENG-3", name: "J. Chen", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-2", name: "Wali", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-3", name: "Sakina", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-4", name: "Anthony", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-5", name: "Chris", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
   ];
 }
 
@@ -110,6 +113,7 @@ function makeTurbine(i: number): Turbine {
     shaftPowerKw: shaftPowerW(features) / 1000,
     source: "sim",
     row,
+    measured: [],
   };
 }
 
@@ -192,12 +196,13 @@ function applyBoard(prev: Board, inputs: StepInputs): Board {
   const now = inputs.nowMs ?? 0;
   const r = inputs.sensor?.readings;
   if (r && inputs.sensorAtMs !== undefined) {
-    const base = prev.features;
-    const ok = r.air_temp_k !== undefined && r.process_temp_k !== undefined && r.rpm !== undefined && r.torque_nm !== undefined && r.tool_wear_min !== undefined;
-    const features: Features | null = ok
-      ? { type: r.type ?? base?.type ?? "L", airTempK: r.air_temp_k!, processTempK: r.process_temp_k!, rpm: r.rpm!, torqueNm: r.torque_nm!, toolWearMin: r.tool_wear_min! }
-      : base;
-    return { features, lastSeenMs: inputs.sensorAtMs, source: features && now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim" };
+    const sent: Partial<Features> = {
+      type: r.type ?? prev.features?.type,
+      airTempK: r.air_temp_k, processTempK: r.process_temp_k, rpm: r.rpm, torqueNm: r.torque_nm, toolWearMin: r.tool_wear_min,
+    };
+    const features = Object.fromEntries(Object.entries(sent).filter(([, v]) => v !== undefined)) as Partial<Features>;
+    const any = Object.keys(features).some((k) => k !== "type");
+    return { features: any ? features : null, lastSeenMs: inputs.sensorAtMs, source: any && now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim" };
   }
   return { ...prev, source: prev.features && prev.lastSeenMs !== null && now - prev.lastSeenMs < SENSOR_STALE_MS ? "live" : "sim" };
 }
@@ -254,13 +259,10 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   for (const tb of turbines) {
     const i = unitIndex(tb);
     const before = tb.features;
-    if (tb.id === LIVE_SENSOR_UNIT && board.source === "live" && board.features) {
-      tb.features = board.features;
-      tb.source = "live";
-      tb.row = null;
-    } else {
+    const liveBoard = tb.id === LIVE_SENSOR_UNIT && board.source === "live" && board.features ? board.features : null;
+    {
       if (tb.row === null) tb.row = startRow(i);
-      tb.source = "sim";
+      tb.source = liveBoard ? "live" : "sim";
       // A tripped unit holds its last reading until someone fixes or resets it.
       if (advanceRow && tb.status !== "tripped") {
         const [start, end] = WINDOWS[i];
@@ -269,7 +271,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
           tb.row = start;
           log("info", tb.id, `${tb.id} tool changed at end of life, wear back to ${Math.round(rowFeatures(start).toolWearMin)} min`);
         }
-        const failure = rowFailure(tb.row);
+        // With the board connected the recorded label no longer matches the readings, so only the live rules below can trip it.
+        const failure = liveBoard ? null : rowFailure(tb.row);
         tb.features = rowFeatures(tb.row);
         if (failure) {
           tb.status = "tripped"; tb.tripCause = FAILURE_NAME[failure]; tb.outputMw = 0;
@@ -277,6 +280,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
         }
       }
     }
+    tb.measured = liveBoard ? (Object.keys(liveBoard).filter((k) => k !== "type") as (keyof Features)[]) : [];
+    if (liveBoard) tb.features = { ...(tb.row === null ? tb.features : rowFeatures(tb.row)), ...liveBoard };
     const grew = tb.features.toolWearMin - before.toolWearMin;
     wearRate[tb.id] = grew > 0 && grew < 20 ? grew : WEAR_PER_ROW;
     tb.shaftPowerKw = shaftPowerW(tb.features) / 1000;

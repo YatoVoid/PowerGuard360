@@ -4,8 +4,9 @@ import { assetLabel } from "../../web/src/sim/site.ts";
 import type { PlantState } from "../../web/src/types.ts";
 
 // The newest Flash is often briefly overloaded; the stable alias takes over so the manager still gets an answer.
-const MODELS = [process.env.GEMINI_MODEL ?? "gemini-3.8-flash", "gemini-flash-latest"];
-const TIMEOUT_MS = 20000;
+const MODELS = [process.env.GEMINI_MODEL ?? "gemini-3.8-flash", "gemini-flash-latest", "gemini-flash-lite-latest"];
+// Per model: a slow model hands over to the next instead of using up the whole wait.
+const TIMEOUT_MS = 9000;
 
 const asset = z.string().regex(/^(GT-0[1-8]|battery|acc|switchyard|gas|datacenter)$/);
 
@@ -78,7 +79,7 @@ export function plantContext(p: PlantState, focus?: string | null) {
         trip_cause: tb.tripCause,
         output_mw: Math.round(tb.outputMw),
         capacity_mw: Math.round(tb.capacityMw),
-        data_source: tb.source === "live" ? "live sensor board" : "AI4I 2020 dataset replay",
+        data_source: tb.source === "live" ? `live sensor board for ${tb.measured.join(", ")}; the other readings replay the AI4I 2020 dataset` : "AI4I 2020 dataset replay",
         readings: {
           quality_grade: f.type,
           air_temp_k: f.airTempK,
@@ -142,12 +143,18 @@ export async function askGemini(key: string, plant: PlantState, req: CopilotRequ
   });
   let res: Response | null = null;
   for (const model of MODELS) {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      body,
-    });
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        body,
+      });
+    } catch (e) {
+      console.warn(`[copilot] ${model}: ${(e as Error).name === "TimeoutError" ? "no answer in 9 s" : "network error"}, trying the next model`);
+      res = null;
+      continue;
+    }
     if (res.ok || ![429, 500, 503].includes(res.status)) break;
     console.warn(`[copilot] ${model} returned HTTP ${res.status}, trying the next model`);
   }

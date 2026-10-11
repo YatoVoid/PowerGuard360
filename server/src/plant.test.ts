@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PlantHost } from "./plant.ts";
-import { ClientMessage, RemotePrediction, SensorReading } from "./protocol.ts";
+import { ClientMessage, RemotePrediction, SensorReading, dropBadReadings } from "./protocol.ts";
 
 describe("plant host", () => {
   it("applies queued actions on the next tick", () => {
@@ -77,5 +77,15 @@ describe("ML laptop forecast", () => {
     h.predict({ unit: "GT-08", probability: 0.7, mode: "PWF", model: "Team model" }, 1000);
     h.tick(1500);
     expect(h.plant.predictions.find((p) => p.turbineId === "GT-08")!.by).toBe("Team model");
+  });
+});
+
+describe("sensor glitches", () => {
+  it("drops only the reading that is out of range and keeps the rest of the post", () => {
+    const { json, dropped } = dropBadReadings({ device: "b", seq: 1, uptime_ms: 1, readings: { type: "M", air_temp_k: 571.2, process_temp_k: 308.9, rpm: Number.NaN } });
+    expect(dropped).toEqual(["air_temp_k=571.2", "rpm=null"]);
+    const parsed = SensorReading.safeParse(json);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.readings).toEqual({ type: "M", process_temp_k: 308.9 });
   });
 });

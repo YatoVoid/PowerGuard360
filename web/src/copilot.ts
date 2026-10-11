@@ -45,7 +45,7 @@ export const useCopilot = create<CopilotStore>((set, get) => ({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ question: q.slice(0, 500), focus: focus ?? null, history }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(32000),
       });
       const body = await res.json().catch(() => ({}));
       reply = res.ok

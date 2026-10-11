@@ -209,15 +209,18 @@ function Spark({ values }: { values: number[] }) {
 }
 
 const K = 273.15;
-export function FeatureRows({ f }: { f: Features }) {
+// "(live)" marks readings the sensor board measured; a partial reading shows "Not sent" for the rest.
+export function FeatureRows({ f, live = [] }: { f: Partial<Features>; live?: (keyof Features)[] }) {
+  const v = <T,>(x: T | undefined, show: (x: T) => string) => (x === undefined ? 'Not sent' : show(x));
+  const l = (key: keyof Features, label: string) => (live.includes(key) ? `${label} (live)` : label);
   return (
     <View>
-      <KV label="Type (quality grade)" value={f.type} />
-      <KV label="Air temperature" value={`${fmt(f.airTempK, 1)} K (${fmt(f.airTempK - K, 1)} °C)`} />
-      <KV label="Process temperature" value={`${fmt(f.processTempK, 1)} K (${fmt(f.processTempK - K, 1)} °C)`} />
-      <KV label="Rotational speed" value={`${fmt(f.rpm)} rpm`} />
-      <KV label="Torque" value={`${fmt(f.torqueNm, 1)} Nm`} />
-      <KV label="Tool wear" value={`${fmt(f.toolWearMin)} min`} />
+      <KV label="Type (quality grade)" value={f.type ?? 'Not sent'} />
+      <KV label={l('airTempK', 'Air temperature')} value={v(f.airTempK, (t) => `${fmt(t, 1)} K (${fmt(t - K, 1)} °C)`)} />
+      <KV label={l('processTempK', 'Process temperature')} value={v(f.processTempK, (t) => `${fmt(t, 1)} K (${fmt(t - K, 1)} °C)`)} />
+      <KV label={l('rpm', 'Rotational speed')} value={v(f.rpm, (x) => `${fmt(x)} rpm`)} />
+      <KV label={l('torqueNm', 'Torque')} value={v(f.torqueNm, (x) => `${fmt(x, 1)} Nm`)} />
+      <KV label={l('toolWearMin', 'Tool wear')} value={v(f.toolWearMin, (x) => `${fmt(x)} min`)} />
     </View>
   );
 }
@@ -247,9 +250,9 @@ export function TurbineDetail() {
         <Text style={st.panelTitle}>Machine readings</Text>
         <SourceTag source={tb.source} />
       </View>
-      <FeatureRows f={tb.features} />
+      <FeatureRows f={tb.features} live={tb.measured} />
       <Text style={[st.small, { marginTop: 6 }]}>
-        {tb.source === 'live' ? 'Measured live by the sensor board.' : `Dataset row ${tb.row === null ? '' : (tb.row + 1).toLocaleString('en-US')} of the AI4I 2020 data.`}
+        {tb.source === 'live' ? `Readings marked live come from the sensor board; the rest replay dataset row ${tb.row === null ? '' : (tb.row + 1).toLocaleString('en-US')}.` : `Dataset row ${tb.row === null ? '' : (tb.row + 1).toLocaleString('en-US')} of the AI4I 2020 data.`}
       </Text>
       <View style={st.trendRow}>
         <Text style={st.small}>Failure risk, last 3 min</Text>
@@ -306,7 +309,7 @@ export function Sensors() {
       {board.features ? <FeatureRows f={board.features} /> : <Text style={st.small}>No readings received yet.</Text>}
       <Text style={[st.small, { marginTop: 8 }]}>
         {board.source === 'live'
-          ? `The board's six readings drive ${LIVE_SENSOR_UNIT} directly.`
+          ? `These drive ${LIVE_SENSOR_UNIT} live. Anything marked Not sent comes from the dataset.`
           : `Not connected. ${LIVE_SENSOR_UNIT} is replaying the dataset until the board posts readings.`}
       </Text>
     </View>

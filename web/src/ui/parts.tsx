@@ -145,18 +145,30 @@ export function UnitLoadBars() {
 const K = 273.15;
 const kAndC = (k: number) => `${fmt(k, 1)} K (${fmt(k - K, 1)} °C)`;
 
-export function FeatureList({ f }: { f: Features }) {
+export const FEATURE_ROWS: { key: keyof Features; label: string; show: (f: Features) => string }[] = [
+  { key: "airTempK", label: "Air temperature", show: (f) => kAndC(f.airTempK) },
+  { key: "processTempK", label: "Process temperature", show: (f) => kAndC(f.processTempK) },
+  { key: "rpm", label: "Rotational speed", show: (f) => `${fmt(f.rpm)} rpm` },
+  { key: "torqueNm", label: "Torque", show: (f) => `${fmt(f.torqueNm, 1)} Nm` },
+  { key: "toolWearMin", label: "Tool wear", show: (f) => `${fmt(f.toolWearMin)} min` },
+];
+
+// `live` marks the readings the sensor board measured; a partial reading shows "Not sent" for the rest.
+export function FeatureList({ f, live }: { f: Partial<Features>; live?: (keyof Features)[] }) {
   return (
     <dl className="kv">
-      <div><dt>Type (quality grade)</dt><dd>{f.type}</dd></div>
-      <div><dt>Air temperature</dt><dd>{kAndC(f.airTempK)}</dd></div>
-      <div><dt>Process temperature</dt><dd>{kAndC(f.processTempK)}</dd></div>
-      <div><dt>Rotational speed</dt><dd>{fmt(f.rpm)} rpm</dd></div>
-      <div><dt>Torque</dt><dd>{fmt(f.torqueNm, 1)} Nm</dd></div>
-      <div><dt>Tool wear</dt><dd>{fmt(f.toolWearMin)} min</dd></div>
+      <div><dt>Type (quality grade)</dt><dd>{f.type ?? "Not sent"}</dd></div>
+      {FEATURE_ROWS.map((r) => (
+        <div key={r.key}>
+          <dt>{r.label}{live?.includes(r.key) && <span className="live-tag">Live</span>}</dt>
+          <dd className={f[r.key] === undefined ? "muted" : undefined}>{f[r.key] === undefined ? "Not sent" : r.show(f as Features)}</dd>
+        </div>
+      ))}
     </dl>
   );
 }
+
+const featureNames = (keys: (keyof Features)[]) => keys.map((k) => FEATURE_ROWS.find((r) => r.key === k)!.label.toLowerCase()).join(", ");
 
 export function TurbineDetail({ tb }: { tb: Turbine }) {
   const risk = useStore((s) => s.plant.riskHistory[tb.id] ?? []);
@@ -184,9 +196,13 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
         <h4 className="sub">Machine readings</h4>
         <SourceTag source={tb.source} />
       </div>
-      <FeatureList f={tb.features} />
+      <FeatureList f={tb.features} live={tb.measured} />
       <p className="note">
-        {tb.source === "live" ? "Measured live by the sensor board." : `Dataset row ${tb.row === null ? "" : (tb.row + 1).toLocaleString("en-US")} of the AI4I 2020 data.`}
+        {tb.source === "live"
+          ? tb.measured.length === FEATURE_ROWS.length
+            ? "All readings measured live by the sensor board."
+            : `Live from the sensor board: ${featureNames(tb.measured)}. The rest replays dataset row ${tb.row === null ? "" : (tb.row + 1).toLocaleString("en-US")}.`
+          : `Dataset row ${tb.row === null ? "" : (tb.row + 1).toLocaleString("en-US")} of the AI4I 2020 data.`}
         {tb.id === LIVE_SENSOR_UNIT && tb.source === "sim" && " Connect the sensor board to drive these readings live."}
       </p>
       <div className="trend-row">
@@ -426,9 +442,14 @@ export function SensorPanel() {
     <>
       {board.features ? <FeatureList f={board.features} /> : <p className="empty">No readings received yet.</p>}
       <p className="note">
-        {board.source === "live"
-          ? `The board's six readings drive ${LIVE_SENSOR_UNIT} directly. Readings that break the dataset's failure rules trip it.`
-          : `Not connected. ${LIVE_SENSOR_UNIT} is replaying the dataset like the other units until the board posts readings.`}
+        {board.source !== "live"
+          ? `Not connected. ${LIVE_SENSOR_UNIT} is replaying the dataset like the other units until the board posts readings.`
+          : (() => {
+            const missing = FEATURE_ROWS.filter((r) => board.features?.[r.key] === undefined).map((r) => r.key);
+            return missing.length
+              ? `These drive ${LIVE_SENSOR_UNIT} live. The board doesn't send ${featureNames(missing)}, so those come from the dataset. Readings that break the failure rules trip it.`
+              : `All six readings drive ${LIVE_SENSOR_UNIT} live. Readings that break the dataset's failure rules trip it.`;
+          })()}
       </p>
     </>
   );
