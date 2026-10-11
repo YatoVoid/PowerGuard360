@@ -39,8 +39,8 @@ export const ML_METRICS = { train_rows: 8000, test_rows: 2000, recall: 0.779, pr
 // One line on whichever model is producing the forecasts right now.
 export function modelNote(usingService: boolean) {
   return usingService
-    ? `Random Forest trained on ${ML_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On ${ML_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught ${Math.round(ML_METRICS.recall * 100)}% of failures at ${Math.round(ML_METRICS.precision * 100)}% precision (${ML_METRICS.false_alerts} false alerts), and a second Random Forest named the failure type with ${ML_METRICS.type_macro_f1} macro-F1. Tool wear projections cover the failures it can't see coming.`
-    : `Decision tree trained on ${MODEL_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On ${MODEL_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught ${Math.round(MODEL_METRICS.recall * 100)}% of failures at ${Math.round(MODEL_METRICS.precision * 100)}% precision. Tool wear projections cover the failures it can't see coming.`;
+    ? `Random Forest trained on ${ML_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On ${ML_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught ${Math.round(ML_METRICS.recall * 100)}% of failures at ${Math.round(ML_METRICS.precision * 100)}% precision (${ML_METRICS.false_alerts} false alerts), and a second Random Forest named the failure type with ${ML_METRICS.type_macro_f1} macro-F1.`
+    : `Decision tree trained on ${MODEL_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On ${MODEL_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught ${Math.round(MODEL_METRICS.recall * 100)}% of failures at ${Math.round(MODEL_METRICS.precision * 100)}% precision.`;
 }
 export const DATA_SOURCE = data.source;
 
@@ -80,9 +80,3 @@ export function failureProbability(f: Features) {
   return 0;
 }
 
-// Share of rows past 200 min of tool wear that the dataset labels as tool wear failures.
-export const TWF_PER_ROW = (() => {
-  let late = 0, twf = 0;
-  for (const r of ROWS) if (r[5] >= TWF_WEAR_MIN && r[5] <= 240) { late++; if (r[7]) twf++; }
-  return late ? twf / late : 0;
-})();
