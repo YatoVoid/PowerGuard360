@@ -330,11 +330,17 @@ export function AssetDetail() {
   const selected = useStore((s) => s.selected);
   const riskiest = useStore((s) => s.plant.predictions[0]?.turbineId ?? "GT-01");
   const waiting = usePendingRecs()[0];
-  const asset = selected ?? waiting?.asset ?? riskiest;
+  // A request nobody has been sent to yet comes next, otherwise approving a non-turbine
+  // recommendation would jump the panel to a turbine and hide the Dispatch control.
+  const undispatched = useStore((s) => s.plant.requests.find((r) => r.status === "open"));
+  const asset = selected ?? waiting?.asset ?? undispatched?.asset ?? riskiest;
+  const hint = waiting ? `${waiting.id} is waiting for your decision on ${assetName(waiting.asset)}.`
+    : undispatched ? `${undispatched.id} on ${assetName(undispatched.asset)} needs an engineer.`
+    : "Showing the unit most at risk.";
   return (
     <>
       <PendingStrip shown={asset} />
-      {!selected && <p className="hint">{waiting ? `${waiting.id} is waiting for your decision on ${assetName(waiting.asset)}.` : "Showing the unit most at risk."} Click any unit to switch.</p>}
+      {!selected && <p className="hint">{hint} Click any unit to switch.</p>}
       <AssetBody asset={asset} />
       <MaintenanceBox asset={asset} />
     </>
