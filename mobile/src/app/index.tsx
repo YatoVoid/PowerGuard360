@@ -5,6 +5,7 @@ import Svg, { Circle, G, Line, Polyline, Rect, Text as SvgText } from 'react-nat
 
 import { REPAIR_S } from '@engine/sim/engine';
 import { UNIT_X, assetLabel, pathLength } from '@engine/sim/site';
+import { whatToCheck } from '@engine/sim/model';
 import type { MaintenanceRequest, PlantState } from '@engine/types';
 import { ME, SHAKE_STEP_M, myJob, useStore } from '@/state/store';
 import { Btn, KV, Panel, TopBar, st, tap } from '@/ui/parts';
@@ -85,6 +86,7 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
   useEffect(() => { if (job.status !== 'en-route') stopShake(); }, [job.status, stopShake]);
   const me = useStore((s) => s.plant.engineers.find((e) => e.id === ME));
   const leftM = (1 - job.progress) * pathLength(job.path);
+  const check = useStore((s) => whatToCheck(s.plant, job.asset));
   return (
     <Panel title="Your job" aside={<Prio p={job.priority} />}>
       <View style={st.detailHead}>
@@ -92,6 +94,12 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
         <Text style={st.small}>{job.id}</Text>
       </View>
       <Text style={[st.body, { marginBottom: 10 }]}>{job.reason}</Text>
+      {check && (
+        <View style={styles.check}>
+          <Text style={styles.checkLabel}>What to check</Text>
+          <Text style={st.body}>{check}</Text>
+        </View>
+      )}
       <Text style={styles.status}>{STATUS[job.status]}</Text>
 
       {job.status === 'dispatched' && (
@@ -177,6 +185,8 @@ const styles = StyleSheet.create({
   prio: { minWidth: 30, height: 22, borderRadius: 3, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   prioText: { fontFamily: F.bold, fontSize: 12 },
   status: { fontFamily: F.semibold, fontSize: 16, color: C.ink, marginBottom: 12 },
+  check: { borderLeftWidth: 3, borderLeftColor: C.trip, backgroundColor: C.surface2, borderRadius: S.radiusS, padding: 10, marginBottom: 12 },
+  checkLabel: { fontFamily: F.semibold, fontSize: 12, color: C.ink2, marginBottom: 2 },
   shakeBox: { gap: 8, padding: 12, borderRadius: S.radiusS, backgroundColor: C.accentSoft, borderWidth: 1, borderColor: '#b9cff5' },
   shakeBig: { fontFamily: F.numBold, fontSize: 18, color: C.flow },
   link: { padding: 10, borderRadius: S.radiusS, borderWidth: 1, borderColor: C.watch, backgroundColor: C.watchBg },

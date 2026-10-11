@@ -4,7 +4,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } 
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 
 import { LIVE_SENSOR_UNIT, WATCH_RISK } from '@engine/sim/engine';
-import { FAILURE_NAME, MODEL_METRICS } from '@engine/sim/model';
+import { FAILURE_NAME, modelNote } from '@engine/sim/model';
 import type { Features, HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
 import { useStore } from '@/state/store';
 import { C, F, S, clockOf, fmt } from '@/ui/theme';
@@ -225,6 +225,11 @@ export function FeatureRows({ f, live = [] }: { f: Partial<Features>; live?: (ke
   );
 }
 
+const FACTOR_LABEL: Record<string, string> = {
+  'Air temperature [K]': 'air temperature', 'Process temperature [K]': 'process temperature',
+  'Rotational speed [rpm]': 'speed', 'Torque [Nm]': 'torque', 'Tool wear [min]': 'tool wear', Type: 'machine type',
+};
+
 export function TurbineDetail() {
   const plant = useStore((s) => s.plant);
   const selected = useStore((s) => s.selected);
@@ -233,6 +238,7 @@ export function TurbineDetail() {
   const picked = plant.turbines.find((x) => x.id === selected);
   const tb = picked ?? plant.turbines.find((x) => x.id === plant.predictions[0]?.turbineId) ?? plant.turbines[0];
   const pred = plant.predictions.find((p) => p.turbineId === tb.id);
+  const ml = pred?.ml ?? (tb.status === 'tripped' ? tb.diagnosis : null);
   const statusBg = tb.status === 'watch' ? C.watch : tb.status === 'tripped' ? C.trip : C.surface2;
   return (
     <View>
@@ -260,6 +266,24 @@ export function TurbineDetail() {
       </View>
       {pred && pred.risk >= 0.2 && <Text style={st.forecast}>{pred.detail}</Text>}
       {pred && <Text style={[st.small, { marginTop: 6 }]}>{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</Text>}
+      {ml && (
+        <View style={{ marginTop: 12 }}>
+          <Text style={[st.panelTitle, { marginBottom: 4 }]}>{pred?.ml ? 'Model diagnosis' : 'Model diagnosis of the trip reading'}</Text>
+          <KV label="Alert level" value={ml.alertLevel} />
+          <KV
+            label="Failure type"
+            value={ml.failureClass
+              ? ml.types.length ? ml.types.map((t) => `${t.name} ${Math.round(t.probability * 100)}%`).join(', ') : 'Unclear'
+              : 'None'}
+          />
+          {ml.factors && (
+            <Text style={[st.small, { marginTop: 6 }]}>
+              Moved the risk most: {ml.factors.map((f) => `${FACTOR_LABEL[f.feature] ?? f.feature} ${f.contribution > 0 ? '+' : '−'}${Math.abs(Math.round(f.contribution * 100))} pts`).join(', ')}
+            </Text>
+          )}
+          {(ml.alertLevel === 'Alert' || ml.alertLevel === 'Critical') && <Text style={[st.forecast, { color: C.ink }]}>{ml.action}</Text>}
+        </View>
+      )}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
         {(tb.status === 'running' || tb.status === 'watch') && (
           <Btn
@@ -295,9 +319,7 @@ export function Predictions() {
           <View style={st.meter}><View style={{ height: 6, width: `${p.risk * 100}%`, backgroundColor: p.risk > 0.6 ? C.trip : p.risk > 0.3 ? C.watch : C.ink2 }} /></View>
         </Pressable>
       ))}
-      <Text style={[st.small, { marginTop: 4 }]}>
-        Decision tree trained on {MODEL_METRICS.train_rows.toLocaleString('en-US')} rows of the AI4I 2020 dataset. On {MODEL_METRICS.test_rows.toLocaleString('en-US')} unseen rows it caught {Math.round(MODEL_METRICS.recall * 100)}% of failures at {Math.round(MODEL_METRICS.precision * 100)}% precision.
-      </Text>
+      <Text style={[st.small, { marginTop: 4 }]}>{modelNote(preds.some((p) => p.ml))}</Text>
     </View>
   );
 }

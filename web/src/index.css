@@ -574,3 +574,12 @@ h1, h2, h3, h4 { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .cp-busy::after { animation: none; content: "..."; } }
 .live-tag { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: #e3f5ec; color: #137a4b; vertical-align: 1px; }
 .kv dd.muted { color: var(--ink-3); font-weight: 400; }
+
+/* model diagnosis from the machine_learning service */
+.ml .sub { margin-top: 16px; }
+.ml-factors { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.ml-factors li { display: flex; justify-content: space-between; gap: 12px; }
+.ml-factors .muted { color: var(--ink-3); margin-left: 4px; }
+.ml-factors .up { color: var(--trip); font-variant-numeric: tabular-nums; }
+.ml-factors .down { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.ml-action { margin: 10px 0 0; padding: 9px 11px; border-left: 3px solid var(--trip); background: var(--surface-2); border-radius: 0 var(--radius-s) var(--radius-s) 0; }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PlantHost } from "./plant.ts";
+import { MlScorer, toRemote } from "./ml.ts";
 import { ClientMessage, RemotePrediction, SensorReading, dropBadReadings } from "./protocol.ts";
 
 describe("plant host", () => {
@@ -87,5 +88,91 @@ describe("sensor glitches", () => {
     const parsed = SensorReading.safeParse(json);
     expect(parsed.success).toBe(true);
     expect(parsed.data?.readings).toEqual({ type: "M", process_temp_k: 308.9 });
+  });
+});
+
+describe("machine_learning service", () => {
+  const unit = (id: string, risk: number, cls: 0 | 1) => ({
+    unit: id, failure_risk: risk, failure_class: cls,
+    failure_types: cls ? [{ code: "PWF" as const, name: "Power failure", probability: 0.88 }] : [],
+    top_features: [{ feature: "Torque [Nm]", value: 68.1, contribution: 0.52, direction: "increased risk" }],
+    alert_level: cls ? "Critical" as const : "Normal" as const,
+    suggested_action: cls ? "Inspect motor and power supply." : "No action.",
+  });
+
+  it("turns a flagged unit into a diagnosis with its cause", () => {
+    const r = toRemote(unit("GT-03", 0.93, 1), 0.61);
+    expect(r).toMatchObject({ unit: "GT-03", probability: 0.93, mode: "PWF", model: "Random Forest" });
+    expect(r.detail).toBe("Power failure detected (93% risk, driven by torque)");
+    expect(r.ml?.action).toBe("Inspect motor and power supply.");
+  });
+
+  it("leaves the failure type empty below the alert threshold", () => {
+    expect(toRemote(unit("GT-03", 0.2, 0), 0.61).mode).toBeNull();
+  });
+
+  it("drives every unit while fresh and falls back to the tree when the service goes quiet", () => {
+    const h = new PlantHost();
+    h.scored([toRemote(unit("GT-03", 0.93, 1), 0.61), toRemote(unit("GT-05", 0.01, 0), 0.61)], 1000);
+    h.tick(2000);
+    expect(h.plant.predictions.find((p) => p.turbineId === "GT-03")).toMatchObject({ by: "Random Forest", mode: "PWF" });
+    expect(h.plant.predictions.find((p) => p.turbineId === "GT-05")!.by).toBe("Random Forest");
+    expect(h.plant.turbines[2].status).toBe("watch");
+    h.tick(20000);
+    expect(h.plant.predictions.find((p) => p.turbineId === "GT-05")!.by).toBe("Decision tree");
+  });
+
+  it("lets the ML laptop's own post win for its unit", () => {
+    const h = new PlantHost();
+    h.scored([toRemote(unit("GT-08", 0.01, 0), 0.61)], 1000);
+    h.predict({ unit: "GT-08", probability: 0.7, model: "Team ML" }, 1000);
+    h.tick(2000);
+    expect(h.plant.predictions.find((p) => p.turbineId === "GT-08")!.by).toBe("Team ML");
+  });
+});
+
+describe("diagnosis of a trip", () => {
+  it("keeps the model's verdict on the trip reading until the unit runs again", () => {
+    const h = new PlantHost();
+    h.tick(1000);
+    h.apply({ type: "trip", unit: "GT-02" });
+    h.tick(2000);
+    const flagged = {
+      unit: "GT-02", failure_risk: 0.95, failure_class: 1 as const,
+      failure_types: [{ code: "HDF" as const, name: "Heat dissipation failure", probability: 0.9 }],
+      top_features: null, alert_level: "Critical" as const, suggested_action: "Inspect cooling.",
+    };
+    const atTrip = h.plant.turbines[1].features;
+    expect(h.plant.turbines[1].tripReading).toEqual(atTrip);
+    h.scored([toRemote({ ...flagged, unit: "GT-03" }, 0.61), toRemote(flagged, 0.61, true)], 2100);
+    h.tick(3000);
+    expect(h.plant.turbines[1].diagnosis?.action).toBe("Inspect cooling.");
+    expect(h.plant.turbines[2].diagnosis ?? null).toBeNull();
+    expect(h.plant.events.some((e) => e.text === "GT-02 model diagnosis: heat dissipation failure (95% risk)")).toBe(true);
+    h.tick(30000);
+    expect(h.plant.turbines[1].diagnosis?.action).toBe("Inspect cooling.");
+    h.apply({ type: "reset", unit: "GT-02" });
+    h.tick(31000);
+    expect(h.plant.turbines[1].diagnosis).toBeNull();
+    expect(h.plant.turbines[1].tripReading).toBeNull();
+  });
+
+  it("diagnoses the reading the unit tripped on, not a later one", async () => {
+    const h = new PlantHost();
+    h.ingest({ device: "b", seq: 1, uptime_ms: 1, readings: { type: "M", air_temp_k: 300.8, process_temp_k: 309.4, rpm: 1342, torque_nm: 62.4, tool_wear_min: 113 } }, 1000);
+    h.tick(1000);
+    h.apply({ type: "trip", unit: "GT-08" });
+    h.tick(2000);
+    h.ingest({ device: "b", seq: 2, uptime_ms: 2, readings: { type: "M", air_temp_k: 299, process_temp_k: 310, rpm: 1500, torque_nm: 40, tool_wear_min: 115 } }, 2500);
+    h.tick(3000);
+    let sent: { units: { unit: string; features: { rpm: number } }[] } | undefined;
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_u: string, init: { body: string }) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ threshold: 0.61, units: [] })); }) as typeof fetch;
+    try {
+      new MlScorer("http://x", () => {}).score(h.plant);
+      await new Promise((r) => setTimeout(r, 10));
+    } finally { globalThis.fetch = real; }
+    expect(h.plant.turbines[7].features.rpm).toBe(1500);
+    expect(sent!.units.find((u) => u.unit === "GT-08")!.features.rpm).toBe(1342);
   });
 });

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
-import { FAILURE_NAME, MODEL_METRICS } from "../sim/model";
-import type { Features, HistoryPoint, MaintenanceRequest, PlantEvent, Source, Turbine } from "../types";
+import { FAILURE_NAME, modelNote } from "../sim/model";
+import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Source, Turbine } from "../types";
 import { assetLabel } from "../sim/site";
 import { useCopilot } from "../copilot";
 
@@ -170,6 +170,42 @@ export function FeatureList({ f, live }: { f: Partial<Features>; live?: (keyof F
 
 const featureNames = (keys: (keyof Features)[]) => keys.map((k) => FEATURE_ROWS.find((r) => r.key === k)!.label.toLowerCase()).join(", ");
 
+const FACTOR_LABEL: Record<string, string> = {
+  "Air temperature [K]": "Air temperature", "Process temperature [K]": "Process temperature",
+  "Rotational speed [rpm]": "Speed", "Torque [Nm]": "Torque", "Tool wear [min]": "Tool wear", Type: "Machine type",
+};
+
+function MlDiagnosisPanel({ ml, title = "Model diagnosis" }: { ml: MlDiagnosis; title?: string }) {
+  const urgent = ml.alertLevel === "Alert" || ml.alertLevel === "Critical";
+  return (
+    <section className="ml" aria-label={title}>
+      <h4 className="sub">{title}</h4>
+      <dl className="kv">
+        <div className={urgent ? "is-watch" : undefined}><dt>Alert level</dt><dd>{ml.alertLevel}</dd></div>
+        <div>
+          <dt>Failure type</dt>
+          <dd className={ml.failureClass ? undefined : "muted"}>
+            {ml.failureClass
+              ? ml.types.length ? ml.types.map((t) => `${t.name} ${Math.round(t.probability * 100)}%`).join(", ") : "Unclear, no type above 50%"
+              : `None, risk under ${Math.round(ml.threshold * 100)}%`}
+          </dd>
+        </div>
+      </dl>
+      {ml.factors && (
+        <ul className="ml-factors" aria-label="Inputs that moved the risk most">
+          {ml.factors.map((f) => (
+            <li key={f.feature}>
+              <span>{FACTOR_LABEL[f.feature] ?? f.feature} <span className="muted">{typeof f.value === "number" ? `${fmt(f.value, Number.isInteger(f.value) ? 0 : 1)} ${f.feature.match(/\[(.+)\]/)?.[1] ?? ""}` : f.value}</span></span>
+              <span className={f.contribution > 0 ? "up" : "down"}>{f.contribution > 0 ? "+" : "−"}{Math.abs(Math.round(f.contribution * 100))} pts</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {urgent && <p className="ml-action">{ml.action}</p>}
+    </section>
+  );
+}
+
 export function TurbineDetail({ tb }: { tb: Turbine }) {
   const risk = useStore((s) => s.plant.riskHistory[tb.id] ?? []);
   const pred = useStore((s) => s.plant.predictions.find((p) => p.turbineId === tb.id));
@@ -214,6 +250,8 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
       {pred && (
         <p className="note">{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</p>
       )}
+      {pred?.ml && <MlDiagnosisPanel ml={pred.ml} />}
+      {tb.status === "tripped" && tb.diagnosis && <MlDiagnosisPanel ml={tb.diagnosis} title="Model diagnosis of the trip reading" />}
       <div className="actions">
         {canTrip && <button type="button" className="btn btn-danger" onClick={() => trip(tb.id)}>Trip {tb.id}</button>}
         {tb.status === "tripped" && <button type="button" className="btn" onClick={() => reset(tb.id)}>Reset and restart</button>}
@@ -429,9 +467,7 @@ export function PredictionList() {
           ))}
         </ul>
       )}
-      <p className="note">
-        Decision tree trained on {MODEL_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On {MODEL_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught {Math.round(MODEL_METRICS.recall * 100)}% of failures at {Math.round(MODEL_METRICS.precision * 100)}% precision. Tool wear projections cover the failures it can't see coming.
-      </p>
+      <p className="note">{modelNote(preds.some((p) => p.ml))}</p>
     </>
   );
 }

@@ -2,6 +2,7 @@
 //   npm run board                     steady readings
 //   npm run board -- HDF              lead into a recorded heat dissipation failure (also OSF, PWF, TWF)
 // SERVER_URL defaults to this laptop. ML_URL, if set, gets the same JSON so the ML laptop scores it too.
+// LEAD_ROWS sets how many rows play before the recorded failure (default 40).
 import { ROWS, rowFailure, rowFeatures } from "../../web/src/sim/model.ts";
 import type { FailureMode } from "../../web/src/types.ts";
 
@@ -9,7 +10,7 @@ const SERVER_URL = process.env.SERVER_URL ?? "http://localhost:8787";
 const ML_URL = process.env.ML_URL ?? "";
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? "";
 const EVERY_MS = Number(process.env.EVERY_MS ?? 1000);
-const LEAD_ROWS = 40;
+const LEAD_ROWS = Number(process.env.LEAD_ROWS ?? 40);
 
 const mode = (process.argv[2]?.toUpperCase() ?? "") as FailureMode | "";
 if (mode && !["HDF", "OSF", "PWF", "TWF"].includes(mode)) {

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.pytest_cache/
+# Only the final bundle is committed; anything else in models/ stays local
+models/*
+!models/.gitkeep
+!models/powerguard_bundle.joblib
+train.log

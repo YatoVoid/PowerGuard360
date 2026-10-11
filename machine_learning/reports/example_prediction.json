@@ -1,0 +1,120 @@
+{
+  "input_sent": {
+    "Type": "L",
+    "Air temperature [K]": 303.7,
+    "Process temperature [K]": 312.1,
+    "Rotational speed [rpm]": 1363,
+    "Torque [Nm]": 51.8,
+    "Tool wear [min]": 90
+  },
+  "prediction": {
+    "equipment_id": "DEMO-HELDOUT",
+    "timestamp": "2026-10-11T07:55:29+00:00",
+    "inputs": {
+      "Type": {
+        "value": "L",
+        "raw": "L",
+        "source": "dataset_replay"
+      },
+      "Air temperature [K]": {
+        "value": 303.7,
+        "raw": 303.7,
+        "source": "dataset_replay"
+      },
+      "Process temperature [K]": {
+        "value": 312.1,
+        "raw": 312.1,
+        "source": "dataset_replay"
+      },
+      "Rotational speed [rpm]": {
+        "value": 1363.0,
+        "raw": 1363,
+        "source": "dataset_replay"
+      },
+      "Torque [Nm]": {
+        "value": 51.8,
+        "raw": 51.8,
+        "source": "dataset_replay"
+      },
+      "Tool wear [min]": {
+        "value": 90.0,
+        "raw": 90,
+        "source": "dataset_replay"
+      }
+    },
+    "context_readings": {},
+    "data_quality": {
+      "imputed_features": [],
+      "warnings": []
+    },
+    "model_output": {
+      "label": "MODEL OUTPUT",
+      "failure_class": 1,
+      "failure_risk": 0.9577,
+      "decision_threshold": 0.6135,
+      "failure_types": {
+        "predicted": [
+          {
+            "code": "HDF",
+            "name": "Heat dissipation failure"
+          }
+        ],
+        "probabilities": {
+          "TWF": 0.0,
+          "HDF": 0.9133,
+          "PWF": 0.0167,
+          "OSF": 0.0
+        },
+        "not_modelled": [
+          "RNF"
+        ],
+        "note": null
+      },
+      "explanation": {
+        "method": "SHAP (exact, interventional) on the six inputs, in calibrated-risk units",
+        "baseline_risk": 0.0442,
+        "top_features": [
+          {
+            "feature": "Air temperature [K]",
+            "value": 303.7,
+            "contribution": 0.4856,
+            "direction": "increased risk"
+          },
+          {
+            "feature": "Rotational speed [rpm]",
+            "value": 1363.0,
+            "contribution": 0.2895,
+            "direction": "increased risk"
+          },
+          {
+            "feature": "Torque [Nm]",
+            "value": 51.8,
+            "contribution": 0.1281,
+            "direction": "increased risk"
+          }
+        ],
+        "caveat": "Shows how the model used each input, not proof of physical cause."
+      },
+      "model": {
+        "detector": "Random Forest (unweighted)",
+        "calibration": "sigmoid",
+        "diagnosis": "Random Forest",
+        "trained_at": "2026-10-11T07:55:28+00:00"
+      }
+    },
+    "rule_based": {
+      "label": "RULE-BASED RECOMMENDATION (not a model output)",
+      "alert_level": "Critical",
+      "dispatch_maintenance": true,
+      "suggested_action": "Inspect cooling: fans, airflow and heat exchangers. The process/air temperature gap is too small."
+    }
+  },
+  "actual_labels_for_reference_only": {
+    "Machine failure": 1,
+    "TWF": 0,
+    "HDF": 1,
+    "PWF": 0,
+    "OSF": 0,
+    "RNF": 0
+  }
+}
