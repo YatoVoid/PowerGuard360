@@ -17,7 +17,8 @@ export const ROW_SECONDS = 8;
 const HISTORY_LEN = 300;
 const RISK_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
-const SENSOR_STALE_MS = 5000;
+// Wi-Fi on a small board drops a post now and then; only call it offline after a real silence.
+const SENSOR_STALE_MS = 15000;
 // The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
 const REMOTE_STALE_MS = 15000;
 // Raise a P3 request when a failure is forecast within this many minutes.

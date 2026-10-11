@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PlantHost } from "./plant.ts";
 import type { z } from "zod";
-import { ClientMessage, RemotePrediction, SensorReading } from "./protocol.ts";
+import { ClientMessage, RemotePrediction, SensorReading, dropBadReadings } from "./protocol.ts";
 import { CopilotLimiter, CopilotRequest, askGemini } from "./copilot.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -87,15 +87,27 @@ function readJson(req: IncomingMessage, res: ServerResponse, done: (json: unknow
   });
 }
 
+// One line per 10 s at most, so a sensor stuck out of range doesn't flood the terminal.
+let lastDropWarn = 0;
+function warnDropped(from: string | undefined, dropped: string[]) {
+  if (Date.now() - lastDropWarn < 10000) return;
+  lastDropWarn = Date.now();
+  console.warn(`[ingest] ignored out-of-range readings from ${from}: ${dropped.join(", ")} (the rest of the post was used)`);
+}
+
 // LOG_INGEST=1 prints every reading as received, for wiring up a new board.
 const LOG_INGEST = process.env.LOG_INGEST === "1";
 
-function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token: string, schema: z.ZodType<T>, accept: (data: T) => void) {
+function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token: string, schema: z.ZodType<T>, accept: (data: T) => void,
+  clean?: (json: unknown) => { json: unknown; dropped: string[] }) {
   if (!tokenOk(req, token)) {
     console.warn(`[${name}] rejected request from ${req.socket.remoteAddress}: bad or missing token`);
     return send(res, 401, { error: "unauthorized" });
   }
-  readJson(req, res, (json) => {
+  readJson(req, res, (raw) => {
+    const cleaned = clean ? clean(raw) : { json: raw, dropped: [] };
+    const json = cleaned.json;
+    if (cleaned.dropped.length) warnDropped(req.socket.remoteAddress, cleaned.dropped);
     const parsed = schema.safeParse(json);
     if (LOG_INGEST) console.log(`[${name}] ${req.socket.remoteAddress} ${JSON.stringify(json)}`);
     if (!parsed.success) {
@@ -110,7 +122,7 @@ function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token:
 
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, t: host.plant.t });
-  if (req.method === "POST" && req.url === "/api/ingest") return post(req, res, "ingest", DEVICE_TOKEN, SensorReading, (r) => host.ingest(r));
+  if (req.method === "POST" && req.url === "/api/ingest") return post(req, res, "ingest", DEVICE_TOKEN, SensorReading, (r) => host.ingest(r), dropBadReadings);
   if (req.url === "/api/copilot" && req.method === "OPTIONS") {
     if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
     res.writeHead(204, { "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type", "access-control-max-age": "600" });
@@ -171,6 +183,10 @@ setInterval(() => {
   const msg = JSON.stringify({ type: "state", plant });
   for (const ws of wss.clients) if (ws.readyState === ws.OPEN) ws.send(msg);
 }, 1000);
+
+// Lets the board send many posts over one connection; the UNO R4 takes seconds to open a new one.
+server.keepAliveTimeout = 60000;
+server.headersTimeout = 65000;
 
 server.listen(PORT, () => {
   console.log(`Power Guard 360 plant server on :${PORT}`);
