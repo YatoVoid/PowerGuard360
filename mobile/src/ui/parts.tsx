@@ -12,11 +12,15 @@ import { C, F, S, clockOf, fmt } from '@/ui/theme';
 export function TopBar({ title }: { title: string }) {
   const t = useStore((s) => s.plant.t);
   const alarms = useStore((s) => s.plant.turbines.filter((x) => x.status === 'watch' || x.status === 'tripped').length);
+  const live = useStore((s) => s.link === 'live');
   return (
     <View style={st.top}>
       <View style={{ flex: 1 }}>
-        <Text style={st.brand}>Power Guard 360</Text>
-        <Text style={st.screen}>{title}</Text>
+        <Text style={st.brand}>{title}</Text>
+        <View style={st.linkRow} accessibilityLabel={live ? 'Connected to the plant server' : 'Not connected to the plant server'}>
+          <View style={[st.linkDot, { backgroundColor: live ? C.live : C.ink3 }]} />
+          <Text style={st.screen}>{live ? 'Live from the plant' : 'Offline copy'}</Text>
+        </View>
       </View>
       {alarms > 0 && (
         <View style={st.alarmCount}>
@@ -332,20 +336,22 @@ export function Alarms({ events, limit = 8, empty = 'No alarms.' }: { events: Pl
 
 export const st = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: S.gutter, paddingVertical: 10, backgroundColor: C.surface, borderBottomWidth: 1, borderBottomColor: C.rule },
-  brand: { fontFamily: F.numBold, fontSize: 20, color: C.ink },
+  brand: { fontFamily: F.numBold, fontSize: 22, color: C.ink },
   screen: { fontFamily: F.regular, fontSize: 13, color: C.ink2 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  linkDot: { width: 7, height: 7, borderRadius: 4 },
   clock: { fontFamily: F.num, fontSize: 16, color: C.ink, fontVariant: ['tabular-nums'] },
   alarmCount: { backgroundColor: C.trip, paddingHorizontal: 8, paddingVertical: 3, borderRadius: S.radiusS },
   alarmCountText: { fontFamily: F.semibold, fontSize: 12, color: '#fff' },
   panel: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.rule, borderRadius: S.radius, padding: 14 },
   panelHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  panelTitle: { fontFamily: F.semibold, fontSize: 15, color: C.ink2 },
+  panelTitle: { fontFamily: F.num, fontSize: 16, color: C.ink },
   src: { borderWidth: 1, borderColor: C.rule, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   srcText: { fontFamily: F.semibold, fontSize: 12, color: C.ink2 },
   kv: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: C.surface2, gap: 12 },
   kvLabel: { fontFamily: F.regular, fontSize: 15, color: C.ink2, flexShrink: 1 },
   kvValue: { fontFamily: F.num, fontSize: 16, color: C.ink, fontVariant: ['tabular-nums'], paddingHorizontal: 2 },
-  btn: { minHeight: 48, justifyContent: 'center', borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 16, backgroundColor: C.surface, overflow: 'hidden' },
+  btn: { minHeight: 48, justifyContent: 'center', borderWidth: 1, borderColor: '#c8ced6', borderRadius: S.radiusS, paddingHorizontal: 16, backgroundColor: C.surface, overflow: 'hidden' },
   btnText: { fontFamily: F.semibold, fontSize: 15, color: C.ink },
   stats: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
   stat: { width: '50%', borderTopWidth: 1, borderTopColor: C.rule, paddingTop: 6, paddingRight: 8 },

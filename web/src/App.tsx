@@ -5,10 +5,8 @@ import {
 } from "./ui/parts";
 import { IconBell, IconDashboard, IconMark, IconPlant, IconTag, IconWrench } from "./ui/icons";
 import { MaintenanceView } from "./views/Maintenance";
-import { Toasts } from "./ui/Toasts";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 import { CopilotButton, CopilotPanel } from "./ui/Copilot";
-import { useCopilot } from "./copilot";
 
 const PlantScene = lazy(() => import("./scene/PlantScene").then((m) => ({ default: m.PlantScene })));
 
@@ -200,7 +198,6 @@ function DashboardView() {
 export default function App() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  const copilotOpen = useCopilot((s) => s.open);
   useEffect(() => startClock(), []);
   useEffect(() => {
     const onHash = () => {
@@ -211,7 +208,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   return (
-    <div className={`app ${copilotOpen ? "cp-open" : ""}`}>
+    <div className="app">
       <Sidebar />
       <div className="main-col">
         <TopBar />
@@ -221,7 +218,6 @@ export default function App() {
           {view === "maintenance" && <MaintenanceView />}
         </main>
       </div>
-      <Toasts />
       <CopilotPanel />
       <nav className="tabs" aria-label="Views">
         {VIEWS.map(({ id, label, icon: Icon }) => (

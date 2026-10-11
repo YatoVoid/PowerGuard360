@@ -25,7 +25,7 @@ export function AlertBanner() {
             style={[styles.btn, styles.primary]}
             android_ripple={{ color: '#255fc4' }}
             accessibilityRole="button"
-            onPress={() => { tap(); act({ type: 'accept', requestId: alert.requestId, engineerId: ME }); dismiss(); router.navigate('/work'); }}
+            onPress={() => { tap(); act({ type: 'accept', requestId: alert.requestId, engineerId: ME }); dismiss(); router.navigate('/'); }}
           >
             <Text style={[styles.btnText, { color: '#fff' }]}>Accept</Text>
           </Pressable>
@@ -33,7 +33,7 @@ export function AlertBanner() {
             style={styles.btn}
             android_ripple={{ color: C.surface2 }}
             accessibilityRole="button"
-            onPress={() => { tap(); dismiss(); router.navigate('/work'); }}
+            onPress={() => { tap(); dismiss(); router.navigate('/'); }}
           >
             <Text style={styles.btnText}>View job</Text>
           </Pressable>

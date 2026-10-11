@@ -29,16 +29,17 @@ export default function RootLayout() {
       <StatusBar style="dark" />
       <NativeTabs
         backgroundColor={C.surface}
-        indicatorColor={C.panel}
-        labelStyle={{ default: { color: C.ink2 }, selected: { color: C.ink } }}
+        indicatorColor={C.accentSoft}
+        iconColor={{ default: C.ink3, selected: C.flow }}
+        labelStyle={{ default: { color: C.ink2 }, selected: { color: C.flow } }}
       >
         <NativeTabs.Trigger name="index">
-          <NativeTabs.Trigger.Label>Dashboard</NativeTabs.Trigger.Label>
-          <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/home.png')} renderingMode="template" />
+          <NativeTabs.Trigger.Label>My job</NativeTabs.Trigger.Label>
+          <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/job.png')} renderingMode="template" />
         </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="work">
-          <NativeTabs.Trigger.Label>Work orders</NativeTabs.Trigger.Label>
-          <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/explore.png')} renderingMode="template" />
+        <NativeTabs.Trigger name="plant">
+          <NativeTabs.Trigger.Label>Plant</NativeTabs.Trigger.Label>
+          <NativeTabs.Trigger.Icon src={require('@/assets/images/tabIcons/plant.png')} renderingMode="template" />
         </NativeTabs.Trigger>
       </NativeTabs>
       <AlertBanner />
