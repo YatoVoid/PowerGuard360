@@ -33,13 +33,13 @@ describe("dataset replay", () => {
     }
   });
 
-  it("a unit trips exactly when it reaches a failure row and nobody intervenes", () => {
+  it("replays recorded failures without tripping, and recommends maintenance instead", () => {
     let s = createPlant();
-    for (let i = 0; i < 900 && s.turbines[2].status !== "tripped"; i++) {
-      s = step(s, { cancel: s.requests.filter((r) => r.asset === "GT-03" && r.status !== "cancelled").map((r) => r.id) });
-    }
-    expect(s.turbines[2].status).toBe("tripped");
-    expect(s.turbines[2].tripCause).toBe("Overstrain failure");
+    let tripped = false;
+    for (let i = 0; i < 900; i++) { s = step(s); tripped ||= s.turbines.some((x) => x.status === "tripped"); }
+    expect(tripped).toBe(false);
+    expect(s.recommendations.some((r) => r.status === "pending")).toBe(true);
+    expect(s.requests).toHaveLength(0);
   });
 });
 
@@ -64,38 +64,34 @@ describe("model", () => {
 });
 
 describe("maintenance", () => {
-  it("raises a request for GT-03 before its overstrain failure, and the repair prevents it", () => {
+  it("the manager requests maintenance on a recommendation, with their own notes, and the repair resets the tool", () => {
     let s = createPlant();
-    let raisedAt = -1;
-    for (let i = 0; i < 600; i++) {
-      s = step(s, { autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
-      const r = s.requests.find((x) => x.asset === "GT-03");
-      if (r && raisedAt < 0) raisedAt = s.t;
-      if (r && r.status === "open") s = step(s, { dispatch: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
-      if (r && r.status === "dispatched" && r.engineerId === PHONE_ENGINEER) s = step(s, { accept: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
-      if (r && r.status === "on-site" && r.engineerId === PHONE_ENGINEER) s = step(s, { startRepair: [r.id] });
+    for (let i = 0; i < 900 && !s.requests.some((x) => x.asset === "GT-03" && x.status === "resolved"); i++) {
+      const rec = s.recommendations.find((x) => x.asset === "GT-03" && x.status === "pending");
+      const r = s.requests.find((x) => x.asset === "GT-03" && x.status !== "resolved");
+      const inputs: StepInputs = { autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] };
+      if (rec) inputs.review = [{ recommendationId: rec.id, decision: "request", note: "Check the tool holder" }];
+      if (r?.status === "open") inputs.dispatch = [{ requestId: r.id, engineerId: PHONE_ENGINEER }];
+      if (r?.status === "dispatched") inputs.accept = [{ requestId: r.id, engineerId: PHONE_ENGINEER }];
+      if (r?.status === "on-site") inputs.startRepair = [r.id];
+      s = step(s, inputs);
     }
-    expect(raisedAt).toBeGreaterThan(0);
-    expect(s.events.some((e) => e.asset === "GT-03" && e.severity === "trip")).toBe(false);
-    expect(s.requests.some((x) => x.asset === "GT-03" && x.status === "resolved")).toBe(true);
+    const done = s.requests.find((x) => x.asset === "GT-03")!;
+    expect(done).toMatchObject({ status: "resolved", origin: "model", reason: "Check the tool holder" });
+    expect(done.basis?.detail).toBeTruthy();
+    expect(s.recommendations.find((x) => x.requestId === done.id)!.status).toBe("requested");
+    expect(s.turbines[2].status).toBe("running");
   });
 
-  it("a trip raises a P1 that waits for the manager to dispatch someone", () => {
-    let s = run(createPlant(), 5);
-    s = step(s, { tripRequests: ["GT-05"] });
-    s = run(s, 30);
-    const r = s.requests.find((x) => x.asset === "GT-05")!;
-    expect(r.priority).toBe("P1");
-    expect(r.status).toBe("open");
-    expect(r.engineerId).toBeNull();
+  it("nothing is requested or dispatched until the manager acts", () => {
+    const s = run(createPlant(), 600);
+    expect(s.recommendations.length).toBeGreaterThan(0);
+    expect(s.requests).toHaveLength(0);
     expect(s.engineers.every((e) => e.status === "available")).toBe(true);
-    s = step(s, { dispatch: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
-    expect(s.requests.find((x) => x.id === r.id)).toMatchObject({ status: "dispatched", engineerId: PHONE_ENGINEER });
   });
 
   it("won't dispatch an engineer who is already on a job", () => {
-    let s = step(createPlant(), { tripRequests: ["GT-02", "GT-05"] });
-    s = step(s);
+    let s = step(createPlant(), { newRequests: [{ asset: "GT-02", reason: "" }, { asset: "GT-05", reason: "" }] });
     const [a, b] = ["GT-02", "GT-05"].map((id) => s.requests.find((x) => x.asset === id)!.id);
     s = step(s, { dispatch: [{ requestId: a, engineerId: PHONE_ENGINEER }] });
     s = step(s, { dispatch: [{ requestId: b, engineerId: PHONE_ENGINEER }] });
@@ -103,8 +99,7 @@ describe("maintenance", () => {
   });
 
   it("an engineer already at the turbine starts there instead of walking out to the road", () => {
-    let s = step(createPlant(), { tripRequests: ["GT-05"] });
-    s = step(s);
+    let s = step(createPlant(), { newRequests: [{ asset: "GT-05", reason: "Inspect" }] });
     const first = s.requests.find((x) => x.asset === "GT-05")!.id;
     s = step(s, { dispatch: [{ requestId: first, engineerId: PHONE_ENGINEER }], autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
     s = step(s, { accept: [{ requestId: first, engineerId: PHONE_ENGINEER }] });
@@ -124,8 +119,7 @@ describe("maintenance", () => {
 
   it("the phone engineer walks only on GPS steps, then the repair fits a new tool", () => {
     let s = run(createPlant(), 5);
-    s = step(s, { tripRequests: ["GT-05"] });
-    s = step(s);
+    s = step(s, { newRequests: [{ asset: "GT-05", reason: "Inspect" }] });
     const id = s.requests.find((x) => x.asset === "GT-05")!.id;
     s = step(s, { dispatch: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
     s = step(s, { accept: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
@@ -188,13 +182,28 @@ describe("GT-08 live sensor board", () => {
     expect(s.board.features).toEqual({ type: "M", airTempK: 297.4, processTempK: 303.8, toolWearMin: 6 });
   });
 
-  it("trips on live readings that break the dataset's overstrain rule", () => {
+  it("a flagged live reading is recommended for maintenance, not tripped", () => {
+    const ml = { failureClass: 1 as const, alertLevel: "Critical" as const, threshold: 0.61, types: [{ code: "OSF" as const, name: "Overstrain failure", probability: 0.97 }], factors: null, action: "Reduce load and replace the tool." };
     const s = step(createPlant(), {
       sensor: reading({ type: "L", air_temp_k: 299, process_temp_k: 310, rpm: 1400, torque_nm: 60, tool_wear_min: 200 }),
       sensorAtMs: 1000, nowMs: 1500,
+      remote: [{ unit: "GT-08", probability: 0.97, mode: "OSF", detail: "Overstrain failure detected", model: "Random Forest", ml }], remoteAtMs: 1000,
     });
-    expect(s.turbines[7].status).toBe("tripped");
-    expect(s.turbines[7].tripCause).toBe("Overstrain failure");
+    expect(s.turbines[7].status).toBe("watch");
+    expect(s.recommendations.find((r) => r.asset === "GT-08")).toMatchObject({ status: "pending", alertLevel: "Critical", action: "Reduce load and replace the tool." });
+  });
+
+  it("a declined unit stays quiet for a while, then can be recommended again", () => {
+    const ml = { failureClass: 1 as const, alertLevel: "Alert" as const, threshold: 0.61, types: [], factors: null, action: "Run a general inspection." };
+    const flagged = (nowMs: number) => ({ remote: [{ unit: "GT-01", probability: 0.7, mode: null, model: "Random Forest", ml }], remoteAtMs: nowMs, nowMs });
+    let s = step(createPlant(), flagged(1000));
+    const rec = s.recommendations.find((r) => r.asset === "GT-01")!;
+    s = step(s, { ...flagged(2000), review: [{ recommendationId: rec.id, decision: "decline", note: "" }] });
+    for (let i = 0; i < 100; i++) s = step(s, flagged(3000 + i * 1000));
+    expect(s.recommendations.filter((r) => r.asset === "GT-01")).toHaveLength(1);
+    expect(s.requests).toHaveLength(0);
+    for (let i = 0; i < 100; i++) s = step(s, flagged(200000 + i * 1000));
+    expect(s.recommendations.filter((r) => r.asset === "GT-01" && r.status === "pending")).toHaveLength(1);
   });
 
   it("ignores stale readings", () => {

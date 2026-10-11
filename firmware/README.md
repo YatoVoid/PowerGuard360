@@ -36,7 +36,7 @@ Content-Type: application/json
 
 - Send once a second. `seq` goes up by one every send.
 - Leave a reading out if the sensor fails. Never send 0 or -1 as a fake value.
-- GT-08 trips on the dataset's own failure rules, so you can demo each one live:
+- These readings are what the dataset labels as failures, so pushing the board into one should make the model recommend maintenance on GT-08:
   - Overstrain: tool wear × torque above 11,000 (type L), 12,000 (M) or 13,000 (H).
   - Heat dissipation: process minus air temperature below 8.6 K while speed is under 1,380 rpm.
   - Power: torque × speed (rad/s) outside 3,500 to 9,000 W.

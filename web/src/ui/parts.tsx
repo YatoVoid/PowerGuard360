@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
 import { FAILURE_NAME, modelNote } from "../sim/model";
-import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Source, Turbine } from "../types";
+import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Recommendation, Source, Turbine } from "../types";
 import { assetLabel, pathLength, routeFrom } from "../sim/site";
 import { useCopilot } from "../copilot";
 
@@ -175,6 +175,56 @@ const FACTOR_LABEL: Record<string, string> = {
   "Rotational speed [rpm]": "Speed", "Torque [Nm]": "Torque", "Tool wear [min]": "Tool wear", Type: "Machine type",
 };
 
+function FactorList({ factors }: { factors: NonNullable<MlDiagnosis["factors"]> }) {
+  return (
+    <ul className="ml-factors" aria-label="Inputs that moved the risk most">
+      {factors.map((f) => (
+        <li key={f.feature}>
+          <span>{FACTOR_LABEL[f.feature] ?? f.feature} <span className="muted">{typeof f.value === "number" ? `${fmt(f.value, Number.isInteger(f.value) ? 0 : 1)} ${f.feature.match(/\[(.+)\]/)?.[1] ?? ""}` : f.value}</span></span>
+          <span className={f.contribution > 0 ? "up" : "down"}>{f.contribution > 0 ? "+" : "−"}{Math.abs(Math.round(f.contribution * 100))} pts</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// A model recommendation waiting on the manager: why the model flagged the unit, and the manager's call.
+export function RecommendationCard({ rec, compact = false }: { rec: Recommendation; compact?: boolean }) {
+  const act = useStore((s) => s.act);
+  const select = useStore((s) => s.select);
+  const setView = useStore((s) => s.setView);
+  const [note, setNote] = useState(rec.action);
+  const level = rec.alertLevel === "Critical" ? "p1" : rec.alertLevel === "Alert" ? "p2" : "p3";
+  return (
+    <article className={`rec rec-${level}`} aria-label={`${rec.id} maintenance recommended for ${rec.asset}`}>
+      <div className="req-top">
+        <span className={`prio prio-${level}`}>{rec.alertLevel}</span>
+        {compact ? <strong>{rec.id}</strong> : (
+          <>
+            <strong>{rec.id}</strong>
+            <button type="button" className="link" onClick={() => { select(rec.asset); setView("twin"); }}>{rec.asset}</button>
+          </>
+        )}
+        <span className="req-origin">{Math.round(rec.risk * 100)}% risk</span>
+      </div>
+      <p className="req-reason">{rec.detail}</p>
+      {rec.types.length > 0 && (
+        <p className="rec-types">Possible: {rec.types.map((x) => `${x.name.toLowerCase()} (${Math.round(x.probability * 100)}%)`).join(", ")}</p>
+      )}
+      {rec.factors && <FactorList factors={rec.factors} />}
+      <form className="rec-form" onSubmit={(e) => { e.preventDefault(); act({ type: "review", recommendationId: rec.id, decision: "request", note }); }}>
+        <label htmlFor={`note-${rec.id}`}>What should the engineer check?</label>
+        <textarea id={`note-${rec.id}`} value={note} onChange={(e) => setNote(e.target.value)} rows={compact ? 2 : 3} maxLength={200} />
+        <div className="rec-actions">
+          <button type="button" className="btn btn-quiet" onClick={() => act({ type: "review", recommendationId: rec.id, decision: "decline", note: "" })}>Decline</button>
+          <button type="submit" className="btn btn-primary">Request maintenance</button>
+        </div>
+      </form>
+      <p className="hint">{rec.by} recommendation. Declining keeps {rec.asset} quiet for 3 minutes.</p>
+    </article>
+  );
+}
+
 function MlDiagnosisPanel({ ml, title = "Model diagnosis" }: { ml: MlDiagnosis; title?: string }) {
   const urgent = ml.alertLevel === "Alert" || ml.alertLevel === "Critical";
   return (
@@ -191,16 +241,7 @@ function MlDiagnosisPanel({ ml, title = "Model diagnosis" }: { ml: MlDiagnosis; 
           </dd>
         </div>
       </dl>
-      {ml.factors && (
-        <ul className="ml-factors" aria-label="Inputs that moved the risk most">
-          {ml.factors.map((f) => (
-            <li key={f.feature}>
-              <span>{FACTOR_LABEL[f.feature] ?? f.feature} <span className="muted">{typeof f.value === "number" ? `${fmt(f.value, Number.isInteger(f.value) ? 0 : 1)} ${f.feature.match(/\[(.+)\]/)?.[1] ?? ""}` : f.value}</span></span>
-              <span className={f.contribution > 0 ? "up" : "down"}>{f.contribution > 0 ? "+" : "−"}{Math.abs(Math.round(f.contribution * 100))} pts</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {ml.factors && <FactorList factors={ml.factors} />}
       {urgent && <p className="ml-action">{ml.action}</p>}
     </section>
   );
@@ -317,6 +358,7 @@ export function DispatchControl({ r }: { r: MaintenanceRequest }) {
 
 function MaintenanceBox({ asset }: { asset: string }) {
   const req = useStore((s) => s.plant.requests.find((r) => r.asset === asset && r.status !== "resolved" && r.status !== "cancelled"));
+  const rec = useStore((s) => s.plant.recommendations.find((r) => r.asset === asset && r.status === "pending"));
   const engineer = useStore((s) => (req ? s.plant.engineers.find((e) => e.id === req.engineerId) : undefined));
   const act = useStore((s) => s.act);
   const [reason, setReason] = useState("");
@@ -328,7 +370,7 @@ function MaintenanceBox({ asset }: { asset: string }) {
           <div className="maint-line">
             <PriorityChip p={req.priority} />
             <strong>{req.id}</strong>
-            <span className="maint-origin">{req.origin === "auto" ? "raised by sensors" : "requested manually"}</span>
+            <span className="maint-origin">{req.origin === "model" ? "requested on model advice" : "requested manually"}</span>
           </div>
           <p className="maint-reason">{req.reason}</p>
           <dl className="kv">
@@ -342,6 +384,8 @@ function MaintenanceBox({ asset }: { asset: string }) {
           )}
           <div className="actions"><button type="button" className="btn" onClick={() => act({ type: "cancel", requestId: req.id })}>Cancel request</button></div>
         </>
+      ) : rec ? (
+        <RecommendationCard key={rec.id} rec={rec} compact />
       ) : (
         <form
           className="maint-form"

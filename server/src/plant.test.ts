@@ -25,7 +25,7 @@ describe("phone stand-in", () => {
   it("handles the phone engineer's job when no phone is connected", () => {
     const h = new PlantHost();
     h.tick();
-    h.apply({ type: "trip", unit: "GT-04" });
+    h.apply({ type: "request", asset: "GT-04", reason: "Inspect" });
     h.tick();
     h.apply({ type: "dispatch", requestId: h.plant.requests[0].id, engineerId: "ENG-1" });
     for (let i = 0; i < 600 && !h.plant.requests.some((r) => r.status === "resolved"); i++) h.tick();
@@ -37,7 +37,7 @@ describe("phone stand-in", () => {
     const h = new PlantHost();
     h.phonesOnline.add("ENG-1");
     h.tick();
-    h.apply({ type: "trip", unit: "GT-04" });
+    h.apply({ type: "request", asset: "GT-04", reason: "Inspect" });
     h.tick();
     h.apply({ type: "dispatch", requestId: h.plant.requests[0].id, engineerId: "ENG-1" });
     for (let i = 0; i < 30; i++) h.tick();
@@ -59,10 +59,29 @@ describe("dispatch", () => {
   it("leaves requests open until the manager dispatches one", () => {
     const h = new PlantHost();
     h.tick();
-    h.apply({ type: "trip", unit: "GT-04" });
+    h.apply({ type: "request", asset: "GT-04", reason: "Inspect" });
     for (let i = 0; i < 60; i++) h.tick();
     expect(h.plant.requests[0].status).toBe("open");
     expect(ClientMessage.safeParse({ type: "action", action: { type: "dispatch", requestId: "MR-101", engineerId: "ENG-2" } }).success).toBe(true);
+  });
+});
+
+describe("recommendations", () => {
+  it("turn into a request only when the manager asks, with their notes", () => {
+    const h = new PlantHost();
+    h.scored([toRemote({
+      unit: "GT-06", failure_risk: 0.9, failure_class: 1, failure_types: [{ code: "HDF", name: "Heat dissipation failure", probability: 0.9 }],
+      top_features: null, alert_level: "Critical", suggested_action: "Inspect cooling.",
+    }, 0.61)], 1000);
+    h.tick(2000);
+    const rec = h.plant.recommendations.find((r) => r.asset === "GT-06")!;
+    expect(rec.status).toBe("pending");
+    expect(h.plant.requests).toHaveLength(0);
+    const msg = ClientMessage.safeParse({ type: "action", action: { type: "review", recommendationId: rec.id, decision: "request", note: "Check fan 2 bearings" } });
+    expect(msg.success).toBe(true);
+    if (msg.success && msg.data.type === "action") h.apply(msg.data.action);
+    h.tick(3000);
+    expect(h.plant.requests[0]).toMatchObject({ asset: "GT-06", reason: "Check fan 2 bearings", priority: "P1", origin: "model", status: "open" });
   });
 });
 

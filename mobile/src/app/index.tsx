@@ -5,7 +5,6 @@ import Svg, { Circle, G, Line, Polyline, Rect, Text as SvgText } from 'react-nat
 
 import { REPAIR_S } from '@engine/sim/engine';
 import { UNIT_X, assetLabel, pathLength } from '@engine/sim/site';
-import { whatToCheck } from '@engine/sim/model';
 import type { MaintenanceRequest, PlantState } from '@engine/types';
 import { ME, SHAKE_STEP_M, myJob, useStore } from '@/state/store';
 import { Btn, KV, Panel, TopBar, st, tap } from '@/ui/parts';
@@ -86,20 +85,17 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
   useEffect(() => { if (job.status !== 'en-route') stopShake(); }, [job.status, stopShake]);
   const me = useStore((s) => s.plant.engineers.find((e) => e.id === ME));
   const leftM = (1 - job.progress) * pathLength(job.path);
-  const check = useStore((s) => whatToCheck(s.plant, job.asset));
   return (
     <Panel title="Your job" aside={<Prio p={job.priority} />}>
       <View style={st.detailHead}>
         <Text style={st.detailId}>{job.asset.startsWith('GT-') ? job.asset : assetLabel(job.asset)}</Text>
         <Text style={st.small}>{job.id}</Text>
       </View>
-      <Text style={[st.body, { marginBottom: 10 }]}>{job.reason}</Text>
-      {check && (
-        <View style={styles.check}>
-          <Text style={styles.checkLabel}>What to check</Text>
-          <Text style={st.body}>{check}</Text>
-        </View>
-      )}
+      <View style={styles.check}>
+        <Text style={styles.checkLabel}>What to check</Text>
+        <Text style={st.body}>{job.reason}</Text>
+      </View>
+      {job.basis && <Text style={[st.small, { marginBottom: 12 }]}>Why the model flagged it: {job.basis.detail}</Text>}
       <Text style={styles.status}>{STATUS[job.status]}</Text>
 
       {job.status === 'dispatched' && (

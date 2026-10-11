@@ -1,8 +1,8 @@
 # Power Guard 360
 
-Catches gas turbine failures in sensor data before or as they happen and raises a maintenance request. The plant manager works from the website (3D plant, dashboard, maintenance board, Gemini copilot) and dispatches an engineer to each request; nothing is sent to an engineer until the manager does. The engineer gets the job on an Android app, walks to the asset by shaking the phone, and does the repair. Both stay in sync through the plant server.
+Predictive maintenance for a gas turbine plant. A machine learning model watches every turbine's sensor data and tells the plant manager when a unit needs maintenance and why: the likely failure, the readings behind it and what to check. The manager declines it or requests maintenance with their own notes for the engineer, then dispatches someone. Nothing reaches an engineer until the manager does. The engineer gets the job on an Android app, walks to the asset by shaking the phone, and does the repair. Turbines don't actually fail in the demo; the recorded failures in the dataset are what the model has to see coming. Website and app stay in sync through the plant server.
 
-Two Random Forest models score every turbine once a second: one detects failures (calibrated risk, 78% recall at 96% precision on 2,000 unseen rows), the other names the failure type (heat dissipation, power, overstrain, tool wear). Each forecast comes with the inputs that drove it (SHAP) and a maintenance action, which the engineer sees on the job.
+Two Random Forest models score every turbine once a second: one detects failures (calibrated risk, 78% recall at 96% precision on 2,000 unseen rows), the other names the failure type (heat dissipation, power, overstrain, tool wear). When the first one flags a unit, the maintenance board shows a recommendation with the risk, the possible failures, the three inputs that moved the risk most (SHAP) and the model's suggested check, prefilled as the manager's note.
 
 | Folder | What it is |
 |---|---|
@@ -61,11 +61,11 @@ cd server && npm run board -- HDF                      # sensor board simulator
 
 `server/.env` holds `DEVICE_TOKEN`, `MODEL_TOKEN` and `GEMINI_API_KEY`. It is not in git; get it from Wali.
 
-The plant server prints `[ml] scoring every turbine with Random Forest` once it reaches the ML service. Every second it sends each running turbine's six readings to `machine_learning/api.py`, which answers with Model 1's failure risk, Model 2's failure type, the three inputs that moved the risk most (SHAP) and the maintenance action. The website and phone label those forecasts "Random Forest". When a unit trips, the reading it tripped on is scored once more and shown as the model's diagnosis of the trip. If the ML service stops, the server goes back to the built-in decision tree after 15 seconds. `ML_SERVICE_URL` changes the address; `ML_SERVICE_URL=off` skips it.
+The plant server prints `[ml] scoring every turbine with Random Forest` once it reaches the ML service. Every second it sends each running turbine's six readings to `machine_learning/api.py`, which answers with Model 1's failure risk, Model 2's failure type, the three inputs that moved the risk most (SHAP) and the maintenance action. The website and phone label those forecasts "Random Forest". A unit the model flags gets one recommendation, which stays on the board until the manager requests or declines it; a declined unit stays quiet for 3 minutes, a repaired one for 2. If the ML service stops, the server goes back to the built-in decision tree after 15 seconds. `ML_SERVICE_URL` changes the address; `ML_SERVICE_URL=off` skips it.
 
-For the demo, use `-- PWF` or `-- OSF`: the model catches every recorded power and overstrain failure. The `-- HDF` row is one of the 5 heat failures out of 115 it misses (46% risk), and it misses most tool wear failures (see `machine_learning/README.md`).
+For the demo, use `-- PWF` or `-- OSF`: the model flags every recorded power and overstrain failure. The `-- HDF` row is one of the 5 heat failures out of 115 it misses (46% risk), and it misses most tool wear failures (see `machine_learning/README.md`).
 
-The board simulator sends real AI4I rows once a second in the board's format. `npm run board` gives steady readings; `-- HDF`, `-- OSF`, `-- PWF` or `-- TWF` runs 40 seconds into a recorded failure. To also send each reading to the ML laptop:
+The board simulator sends real AI4I rows once a second in the board's format. `npm run board` gives steady readings; `-- HDF`, `-- OSF`, `-- PWF` or `-- TWF` plays 40 rows leading into a recorded failure, which the model should flag as a recommendation for GT-08. To also send each reading to the ML laptop:
 
 ```
 ML_URL=http://<ml-ip>:<port>/<path> npm run board -- HDF
@@ -357,14 +357,14 @@ To see exactly what the board sends, start the server with `LOG_INGEST=1 npx tsx
 
 The board doesn't have to send all six readings. Whatever it sends drives GT-08 live (marked "Live" on the website); anything it leaves out keeps replaying from the dataset.
 
-When it works, GT-08 shows "Live sensor" on the website within a second, and it trips on the dataset's own failure rules (see `firmware/README.md`).
+When it works, GT-08 shows "Live sensor" on the website within a second, and readings the model flags show up as a maintenance recommendation for GT-08.
 
 ### Before judging
 
 - Plug in the host laptop and the hotspot phone. A hotspot drains a battery fast.
 - The host's address can change if the hotspot restarts. Check `ip -4 addr` again and update the Wi-Fi phone.
 - Check the plant server printed `[ml] scoring every turbine with Random Forest`.
-- Do one full run: board simulator, GT-08 request on the maintenance board, Dispatch to the phone engineer, alert on the phone, Accept, walk, website updates, repair.
+- Do one full run: `npm run board -- PWF`, GT-08 recommendation on the maintenance board, edit what to check, Request maintenance, Dispatch to the phone engineer, alert on the phone, Accept, walk, website updates, repair.
 - Backup: the Vercel link runs a local simulation when no server is reachable, so the 3D plant and dashboard still work without the hotspot.
 
 ### Showing it to someone off the hotspot

@@ -87,7 +87,8 @@ function TopBar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const t = useStore((s) => s.plant.t);
-  const alarms = useStore((s) => s.plant.requests.filter((r) => r.status !== "resolved" && r.status !== "cancelled").length);
+  const alarms = useStore((s) => s.plant.requests.filter((r) => r.status !== "resolved" && r.status !== "cancelled").length
+    + s.plant.recommendations.filter((r) => r.status === "pending").length);
   const current = VIEWS.find((v) => v.id === view)!;
   return (
     <header className="top">
@@ -103,7 +104,7 @@ function TopBar() {
         <LinkStatus />
         <time className="clock" aria-label="Plant time">{clockOf(t)}</time>
         <CopilotButton />
-        <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("maintenance")} aria-label={`${alarms} open maintenance requests`}>
+        <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("maintenance")} aria-label={`${alarms} maintenance recommendations and open requests`}>
           <IconBell />
           {alarms > 0 && <span className="bell-count">{alarms}</span>}
         </button>

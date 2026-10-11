@@ -11,7 +11,8 @@ export type Action =
   | { type: "reset"; unit: string }
   | { type: "request"; asset: string; reason: string }
   | { type: "cancel"; requestId: string }
-  | { type: "dispatch"; requestId: string; engineerId: string };
+  | { type: "dispatch"; requestId: string; engineerId: string }
+  | { type: "review"; recommendationId: string; decision: "request" | "decline"; note: string };
 
 // "live" = following the shared plant server; "local" = running our own copy because no server is reachable.
 export type Link = "connecting" | "live" | "local";
@@ -32,8 +33,8 @@ interface Store {
   reset: (id: string) => void;
 }
 
-type LocalQueue = Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "cancel" | "dispatch" | "accept" | "autoWalk">>;
-const emptyQueue = (): LocalQueue => ({ tripRequests: [], resetRequests: [], newRequests: [], cancel: [], dispatch: [], accept: [], autoWalk: [] });
+type LocalQueue = Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "cancel" | "dispatch" | "review" | "accept" | "autoWalk">>;
+const emptyQueue = (): LocalQueue => ({ tripRequests: [], resetRequests: [], newRequests: [], cancel: [], dispatch: [], review: [], accept: [], autoWalk: [] });
 let queue = emptyQueue();
 let socket: WebSocket | null = null;
 
@@ -74,6 +75,7 @@ export const useStore = create<Store>((set, get) => ({
     if (a.type === "request") queue.newRequests.push({ asset: a.asset, reason: a.reason });
     if (a.type === "cancel") queue.cancel.push(a.requestId);
     if (a.type === "dispatch") queue.dispatch.push({ requestId: a.requestId, engineerId: a.engineerId });
+    if (a.type === "review") queue.review.push({ recommendationId: a.recommendationId, decision: a.decision, note: a.note });
   },
   trip: (unit) => get().act({ type: "trip", unit }),
   reset: (unit) => get().act({ type: "reset", unit }),
