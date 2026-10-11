@@ -8,7 +8,7 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore, type CameraPreset } from "../store";
 import { UNIT_X } from "../sim/site";
 import { etaText } from "../ui/parts";
-import { LIVE_SENSOR_UNIT } from "../sim/engine";
+import { LIVE_SENSOR_UNIT, SITE_REPLAY_SPEED, WALK_M_PER_S } from "../sim/engine";
 import type { Turbine } from "../types";
 
 // Layout follows a combined-cycle plant: gas turbine -> heat recovery steam generator (HRSG) with the
@@ -734,15 +734,23 @@ function EngineerFigure({ id }: { id: string }) {
   const e = useStore((s) => s.plant.engineers.find((x) => x.id === id));
   const r = useStore((s) => s.plant.requests.find((x) => x.engineerId === id && x.status !== "resolved" && x.status !== "cancelled"));
   const group = useRef<THREE.Group>(null);
-  useFrame(() => {
+  // The server moves people once a second; walking at a steady pace between updates hides the steps.
+  useFrame((_, dt) => {
     const cur = useStore.getState().plant.engineers.find((x) => x.id === id);
-    if (!group.current || !cur) return;
-    const target = new THREE.Vector3(cur.pos[0], 0.2, cur.pos[1]);
-    if (group.current.position.distanceTo(target) > 0.05) {
-      const ahead = target.clone();
-      group.current.position.lerp(target, 0.15);
-      if (cur.status === "walking") group.current.lookAt(ahead.x, 0.2, ahead.z);
-    }
+    const g = group.current;
+    if (!g || !cur) return;
+    const dx = cur.pos[0] - g.position.x, dz = cur.pos[1] - g.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.05) return;
+    // Teleports (a new job, a reset) snap; otherwise keep pace, catching up if a tick was missed.
+    if (dist > WALK_M_PER_S * SITE_REPLAY_SPEED * 6) { g.position.set(cur.pos[0], 0.2, cur.pos[1]); return; }
+    const step = Math.min(dist, Math.max(WALK_M_PER_S * SITE_REPLAY_SPEED, dist * 1.5) * Math.min(dt, 0.1));
+    g.position.x += (dx / dist) * step;
+    g.position.z += (dz / dist) * step;
+    const heading = Math.atan2(dx, dz);
+    let turn = heading - g.rotation.y;
+    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+    g.rotation.y += turn * Math.min(1, dt * 8);
   });
   const path = r?.path;
   const walking = r?.status === "en-route";

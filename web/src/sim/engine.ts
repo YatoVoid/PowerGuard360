@@ -32,7 +32,7 @@ const WEAR_PER_ROW = 2.5;
 export const LIVE_SENSOR_UNIT = "GT-08";
 // Walking pace on site, replayed faster for the demo.
 export const WALK_M_PER_S = 1.3;
-export const SITE_REPLAY_SPEED = 3;
+export const SITE_REPLAY_SPEED = 5;
 export const REPAIR_S = 25;
 const SIM_ACCEPT_S = 4;
 // After a fix, give the readings time to settle before the forecast can raise a new request.
