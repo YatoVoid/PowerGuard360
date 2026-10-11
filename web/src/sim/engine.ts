@@ -32,8 +32,10 @@ export const REPAIR_S = 25;
 const SIM_ACCEPT_S = 4;
 // After a fix, give the readings time to settle before the model can recommend the unit again.
 const FIX_COOLDOWN_S = 120;
-// After the manager declines, the same unit stays quiet this long.
-const DECLINE_QUIET_S = 180;
+// A decline silences the issue it was about, not the asset. The issue is over once the asset reads
+// normal for this long; a new one, or the same one getting clearly worse, is recommended again.
+const CLEAR_S = 3;
+const WORSE_BY = 0.15;
 const RECOMMENDATION_LEN = 40;
 const PRIORITY_FOR: Record<Recommendation["alertLevel"], Priority> = { Critical: "P1", Alert: "P2", Watch: "P3", Normal: "P3" };
 const GENERAL_ACTION = "Run a general inspection. The model flags failure risk but no specific failure mode.";
@@ -389,15 +391,21 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
   // Recommend maintenance once per asset and keep it current while it waits for the manager.
   type RecFields = Omit<Recommendation, "id" | "asset" | "createdT" | "status" | "decidedT" | "requestId">;
+  const flaggedNow = new Set<string>();
   const recommend = (asset: string, fields: RecFields) => {
+    flaggedNow.add(asset);
     if (openFor(asset) || recentlyFixed(asset)) return;
     const pending = recommendations.find((r) => r.asset === asset && r.status === "pending");
     if (pending) {
       if (fields.risk >= pending.risk) Object.assign(pending, fields);
       return;
     }
-    const declinedT = Math.max(-Infinity, ...recommendations.filter((r) => r.asset === asset && r.status === "declined").map((r) => r.decidedT ?? 0));
-    if (t - declinedT < DECLINE_QUIET_S) return;
+    const silenced = recommendations.find((r) => r.asset === asset && r.status === "declined" && !r.over);
+    if (silenced) {
+      silenced.clearSince = null;
+      if (fields.risk < silenced.risk + WORSE_BY) return;
+      silenced.over = true;
+    }
     const rec: Recommendation = { id: `RC-${101 + recommendations.length}`, asset, createdT: t, ...fields, status: "pending", decidedT: null, requestId: null };
     recommendations.push(rec);
     log("watch", asset, `${rec.id} maintenance recommended for ${assetLabel(asset)}: ${rec.detail}`);
@@ -430,6 +438,12 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
       factors: null,
       action: GAS_LEAK_CHECK,
     });
+  }
+
+  for (const r of recommendations) {
+    if (r.status !== "declined" || r.over || flaggedNow.has(r.asset)) continue;
+    r.clearSince ??= t;
+    if (t - r.clearSince >= CLEAR_S) r.over = true;
   }
 
   for (const id of inputs.cancel ?? []) {
