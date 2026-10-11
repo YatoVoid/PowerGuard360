@@ -113,7 +113,7 @@ describe("maintenance", () => {
     expect(pathLength(s.requests.find((x) => x.id === again.id)!.path)).toBeLessThan(1);
     s = step(s, { accept: [{ requestId: again.id, engineerId: PHONE_ENGINEER }] });
     s = step(s);
-    expect(s.requests.find((x) => x.id === again.id)!.status).toBe("on-site");
+    expect(s.requests.find((x) => x.id === again.id)!.status).toBe("repairing");
     expect(s.engineers.find((e) => e.id === PHONE_ENGINEER)!.pos).toEqual(at);
   });
 
@@ -129,7 +129,7 @@ describe("maintenance", () => {
     for (let i = 0; i < 200 && s.requests.find((x) => x.id === id)!.status === "en-route"; i++) {
       s = step(s, { walkM: [{ engineerId: PHONE_ENGINEER, meters: 8 }] });
     }
-    s = step(s, { startRepair: [id] });
+    expect(s.requests.find((x) => x.id === id)!.status).toBe("repairing");
     for (let i = 0; i < REPAIR_S; i++) s = step(s);
     expect(s.requests.find((x) => x.id === id)!.status).toBe("resolved");
     expect(s.turbines[4].status).toBe("running");

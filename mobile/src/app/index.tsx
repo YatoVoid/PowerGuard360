@@ -130,8 +130,6 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
         </View>
       )}
 
-      {job.status === 'on-site' && <Btn label="Start repair" primary onPress={() => { stopShake(); act({ type: 'startRepair', requestId: job.id }); }} />}
-
       {job.status === 'repairing' && (
         <View style={{ gap: 8 }}>
           <KV label="Time left" value={`${job.repairLeftS} s`} />
