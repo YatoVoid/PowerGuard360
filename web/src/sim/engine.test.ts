@@ -194,17 +194,64 @@ describe("GT-08 live sensor board", () => {
     expect(s.recommendations.find((r) => r.asset === "GT-08")).toMatchObject({ status: "pending", alertLevel: "Critical", action: "Reduce load and replace the tool." });
   });
 
-  it("a declined unit stays quiet for a while, then can be recommended again", () => {
+  describe("declining", () => {
     const ml = { failureClass: 1 as const, alertLevel: "Alert" as const, threshold: 0.61, types: [], factors: null, action: "Run a general inspection." };
-    const flagged = (nowMs: number) => ({ remote: [{ unit: "GT-01", probability: 0.7, mode: null, model: "Random Forest", ml }], remoteAtMs: nowMs, nowMs });
-    let s = step(createPlant(), flagged(1000));
-    const rec = s.recommendations.find((r) => r.asset === "GT-01")!;
-    s = step(s, { ...flagged(2000), review: [{ recommendationId: rec.id, decision: "decline", note: "" }] });
-    for (let i = 0; i < 100; i++) s = step(s, flagged(3000 + i * 1000));
-    expect(s.recommendations.filter((r) => r.asset === "GT-01")).toHaveLength(1);
-    expect(s.requests).toHaveLength(0);
-    for (let i = 0; i < 100; i++) s = step(s, flagged(200000 + i * 1000));
-    expect(s.recommendations.filter((r) => r.asset === "GT-01" && r.status === "pending")).toHaveLength(1);
+    const clean = { ...ml, failureClass: 0 as const, alertLevel: "Normal" as const };
+    let clock = 0;
+    const tick = (s: PlantState, risk: number | null, review?: StepInputs["review"]) => {
+      clock += 1000;
+      const remote = [{ unit: "GT-01", probability: risk ?? 0.01, mode: null, model: "Random Forest", ml: risk === null ? clean : ml }];
+      return step(s, { remote, remoteAtMs: clock, nowMs: clock, review });
+    };
+    const recs = (s: PlantState) => s.recommendations.filter((r) => r.asset === "GT-01");
+    const declined = () => {
+      clock = 0;
+      let s = tick(createPlant(), 0.7);
+      return tick(s, 0.7, [{ recommendationId: recs(s)[0].id, decision: "decline", note: "" }]);
+    };
+
+    it("silences the issue while it lasts", () => {
+      let s = declined();
+      for (let i = 0; i < 300; i++) s = tick(s, 0.7);
+      expect(recs(s)).toHaveLength(1);
+      expect(s.requests).toHaveLength(0);
+    });
+
+    it("asks again as soon as the issue clears and comes back", () => {
+      let s = declined();
+      for (let i = 0; i < 4; i++) s = tick(s, null);
+      s = tick(s, 0.7);
+      expect(recs(s).map((r) => r.status)).toEqual(["declined", "pending"]);
+    });
+
+    it("treats a one-second dip as the same issue", () => {
+      let s = declined();
+      s = tick(s, null);
+      s = tick(s, 0.7);
+      expect(recs(s)).toHaveLength(1);
+    });
+
+    it("asks again when the same issue gets clearly worse", () => {
+      let s = declined();
+      s = tick(s, 0.8);
+      expect(recs(s)).toHaveLength(1);
+      s = tick(s, 0.9);
+      expect(recs(s).map((r) => r.status)).toEqual(["declined", "pending"]);
+    });
+  });
+
+  it("asks about a gas leak again when someone breathes on the sensor a second time", () => {
+    const air = (raw: number) => ({ device: "b", seq: 1, uptime_ms: 1, readings: { air_quality_raw: raw } });
+    let s = createPlant();
+    let ms = 0;
+    const feed = (raw: number, review?: StepInputs["review"]) => { ms += 1000; s = step(s, { sensor: air(raw), sensorAtMs: ms, nowMs: ms, review }); };
+    for (let i = 0; i < 10; i++) feed(1600);
+    feed(3000);
+    const first = s.recommendations.find((r) => r.asset === "gas")!;
+    feed(3000, [{ recommendationId: first.id, decision: "decline", note: "" }]);
+    for (let i = 0; i < 5; i++) feed(1600);
+    feed(3000);
+    expect(s.recommendations.filter((r) => r.asset === "gas").map((r) => r.status)).toEqual(["declined", "pending"]);
   });
 
   it("ignores stale readings", () => {

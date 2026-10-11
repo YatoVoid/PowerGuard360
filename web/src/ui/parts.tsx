@@ -220,7 +220,7 @@ export function RecommendationCard({ rec, compact = false }: { rec: Recommendati
           <button type="submit" className="btn btn-primary">Request maintenance</button>
         </div>
       </form>
-      <p className="hint">{rec.by} recommendation. Declining keeps {rec.asset.startsWith("GT-") ? rec.asset : assetLabel(rec.asset)} quiet for 3 minutes.</p>
+      <p className="hint">{rec.by} recommendation. Declining silences this issue until the reading recovers; if it comes back or gets worse, you'll be asked again.</p>
     </article>
   );
 }

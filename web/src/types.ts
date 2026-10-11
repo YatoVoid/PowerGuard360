@@ -220,6 +220,10 @@ export interface Recommendation {
   status: RecommendationStatus;
   decidedT: number | null;
   requestId: string | null;
+  // Declined only: the issue it was about has cleared, so the same asset can be recommended again.
+  over?: boolean;
+  // Declined only: when the asset first read normal again, while waiting to call the issue over.
+  clearSince?: number | null;
 }
 
 export type EngineerStatus = "available" | "dispatched" | "walking" | "on-site" | "repairing";
