@@ -4,6 +4,7 @@ import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
 import { FAILURE_NAME, MODEL_METRICS } from "../sim/model";
 import type { Features, HistoryPoint, MaintenanceRequest, PlantEvent, Source, Turbine } from "../types";
 import { assetLabel } from "../sim/site";
+import { useCopilot } from "../copilot";
 
 export const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -163,6 +164,11 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
   const trip = useStore((s) => s.trip);
   const reset = useStore((s) => s.reset);
   const canTrip = tb.status === "running" || tb.status === "watch";
+  const live = useStore((s) => s.link === "live");
+  const ask = useCopilot((s) => s.ask);
+  const question = tb.status === "tripped" ? `Why did ${tb.id} trip, and what should the engineer check?`
+    : pred && pred.risk >= 0.2 ? `Why is ${tb.id} at risk, and what should we do?`
+    : `How is ${tb.id} doing?`;
   return (
     <div className="detail">
       <div className="detail-head">
@@ -188,6 +194,7 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
         <Spark values={risk} lo={0} hi={1} warn={WATCH_RISK} />
       </div>
       {pred && pred.risk >= 0.2 && <p className="forecast">{pred.detail}</p>}
+      {live && <button type="button" className="link forecast-ask" onClick={() => ask(question, tb.id)}>Ask Copilot: {question}</button>}
       {pred && (
         <p className="note">{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</p>
       )}

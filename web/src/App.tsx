@@ -7,6 +7,8 @@ import { IconBell, IconDashboard, IconMark, IconPlant, IconTag, IconWrench } fro
 import { MaintenanceView } from "./views/Maintenance";
 import { Toasts } from "./ui/Toasts";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
+import { CopilotButton, CopilotPanel } from "./ui/Copilot";
+import { useCopilot } from "./copilot";
 
 const PlantScene = lazy(() => import("./scene/PlantScene").then((m) => ({ default: m.PlantScene })));
 
@@ -102,6 +104,7 @@ function TopBar() {
       <div className="top-meta">
         <LinkStatus />
         <time className="clock" aria-label="Plant time">{clockOf(t)}</time>
+        <CopilotButton />
         <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("maintenance")} aria-label={`${alarms} open maintenance requests`}>
           <IconBell />
           {alarms > 0 && <span className="bell-count">{alarms}</span>}
@@ -197,6 +200,7 @@ function DashboardView() {
 export default function App() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const copilotOpen = useCopilot((s) => s.open);
   useEffect(() => startClock(), []);
   useEffect(() => {
     const onHash = () => {
@@ -207,7 +211,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   return (
-    <div className="app">
+    <div className={`app ${copilotOpen ? "cp-open" : ""}`}>
       <Sidebar />
       <div className="main-col">
         <TopBar />
@@ -218,6 +222,7 @@ export default function App() {
         </main>
       </div>
       <Toasts />
+      <CopilotPanel />
       <nav className="tabs" aria-label="Views">
         {VIEWS.map(({ id, label, icon: Icon }) => (
           <button key={id} type="button" className="tab" aria-current={view === id ? "page" : undefined} onClick={() => setView(id)}>

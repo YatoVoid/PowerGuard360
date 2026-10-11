@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../store";
+import { useCopilot } from "../copilot";
 import { assetLabel } from "../sim/site";
 import { Panel, PriorityChip, etaText, fmt, requestStatusText } from "../ui/parts";
 import type { MaintenanceRequest } from "../types";
@@ -22,6 +23,8 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const act = useStore((s) => s.act);
+  const live = useStore((s) => s.link === "live");
+  const ask = useCopilot((s) => s.ask);
   const done = r.status === "resolved" || r.status === "cancelled";
   return (
     <li className={`req req-${r.priority.toLowerCase()} ${done ? "is-done" : ""}`}>
@@ -42,6 +45,7 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
       )}
       {!done && (
         <div className="req-actions">
+          {live && <button type="button" className="btn btn-quiet" onClick={() => ask(`Explain ${r.id} on ${r.asset}: what is wrong, how urgent is it, and what should the engineer bring?`, r.asset)}>Explain</button>}
           <button type="button" className="btn btn-quiet" onClick={() => act({ type: "cancel", requestId: r.id })}>Cancel</button>
         </div>
       )}

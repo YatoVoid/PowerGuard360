@@ -4,10 +4,55 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { PlantHost } from "./plant.ts";
 import type { z } from "zod";
 import { ClientMessage, RemotePrediction, SensorReading } from "./protocol.ts";
+import { CopilotLimiter, CopilotRequest, askGemini } from "./copilot.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? "";
 const MODEL_TOKEN = process.env.MODEL_TOKEN ?? "";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const COPILOT_MAX_BODY = 12 * 1024;
+const copilotLimit = new CopilotLimiter();
+
+// Browsers may call the copilot only from the team's own pages: local dev, the LAN at the venue, and the Vercel deployments.
+const ORIGIN_OK = [
+  /^http:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/,
+  /^https:\/\/power-guard-360(-[a-z0-9]+-powerguard360)?\.vercel\.app$/,
+];
+function allowOrigin(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin;
+  if (!origin || !ORIGIN_OK.some((r) => r.test(origin))) return false;
+  res.setHeader("access-control-allow-origin", origin);
+  res.setHeader("vary", "origin");
+  return true;
+}
+
+// Behind the Cloudflare tunnel every request arrives from loopback, so use the address Cloudflare saw.
+function clientIp(req: IncomingMessage) {
+  const remote = req.socket.remoteAddress ?? "";
+  const cf = req.headers["cf-connecting-ip"];
+  return (remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1") && typeof cf === "string" ? cf : remote;
+}
+
+function copilot(req: IncomingMessage, res: ServerResponse) {
+  if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+  if (!GEMINI_API_KEY) return send(res, 503, { error: "The copilot isn't configured on this server." });
+  readJson(req, res, async (json) => {
+    const parsed = CopilotRequest.safeParse(json);
+    if (!parsed.success) return send(res, 400, { error: "Ask a question of up to 500 characters." });
+    const ip = clientIp(req);
+    const gate = copilotLimit.take(ip);
+    if (gate !== "ok") {
+      console.warn(`[copilot] ${ip} hit the ${gate} limit`);
+      return send(res, 429, { error: gate === "minute" ? "Too many questions in a minute. Wait a moment and ask again." : "The copilot has reached today's question limit." });
+    }
+    try {
+      send(res, 200, await askGemini(GEMINI_API_KEY, host.plant, parsed.data));
+    } catch (e) {
+      console.warn(`[copilot] ${(e as Error).message}`);
+      send(res, 502, { error: "The copilot couldn't answer just now. Try again in a few seconds." });
+    }
+  }, COPILOT_MAX_BODY);
+}
 const MAX_BODY = 4 * 1024;
 const ACTIONS_PER_SECOND = 20;
 
@@ -26,12 +71,12 @@ function tokenOk(req: IncomingMessage, token: string) {
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-function readJson(req: IncomingMessage, res: ServerResponse, done: (json: unknown) => void) {
+function readJson(req: IncomingMessage, res: ServerResponse, done: (json: unknown) => void, limit = MAX_BODY) {
   let size = 0;
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => {
     size += c.length;
-    if (size > MAX_BODY) { send(res, 413, { error: "too large" }); req.destroy(); return; }
+    if (size > limit) { send(res, 413, { error: "too large" }); req.destroy(); return; }
     chunks.push(c);
   });
   req.on("end", () => {
@@ -58,6 +103,12 @@ function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token:
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, t: host.plant.t });
   if (req.method === "POST" && req.url === "/api/ingest") return post(req, res, "ingest", DEVICE_TOKEN, SensorReading, (r) => host.ingest(r));
+  if (req.url === "/api/copilot" && req.method === "OPTIONS") {
+    if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+    res.writeHead(204, { "access-control-allow-methods": "POST", "access-control-allow-headers": "content-type", "access-control-max-age": "600" });
+    return res.end();
+  }
+  if (req.method === "POST" && req.url === "/api/copilot") return copilot(req, res);
   if (req.method === "POST" && req.url === "/api/prediction") return post(req, res, "prediction", MODEL_TOKEN, RemotePrediction, (p) => host.predict(p));
   send(res, 404, { error: "not found" });
 });
