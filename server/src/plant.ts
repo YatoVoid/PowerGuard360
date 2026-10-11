@@ -74,7 +74,6 @@ export class PlantHost {
       for (const r of this.plant.requests) {
         if (r.engineerId !== e.id) continue;
         if (r.status === "dispatched") this.inputs.accept.push({ requestId: r.id, engineerId: e.id });
-        if (r.status === "on-site") this.inputs.startRepair.push(r.id);
       }
     }
   }

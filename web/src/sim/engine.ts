@@ -485,7 +485,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
         log("info", r.asset, `${e.name} arrived at ${assetLabel(r.asset)}`);
       }
     }
-    if (e.kind === "sim" && r.status === "on-site") { r.status = "repairing"; e.status = "repairing"; log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`); }
+    // Work starts the moment the engineer arrives; the repair timer needs no button.
+    if (r.status === "on-site") { r.status = "repairing"; e.status = "repairing"; log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`); }
     if (r.status === "repairing") {
       r.repairLeftS = Math.max(0, r.repairLeftS - 1);
       if (r.repairLeftS === 0) {

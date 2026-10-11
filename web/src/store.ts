@@ -89,8 +89,7 @@ function localTick() {
   const pending = s.plant.requests.find((r) => r.engineerId === phone?.id && r.status === "dispatched");
   if (phone && !phone.autoWalk) queue.autoWalk.push({ engineerId: phone.id, on: true });
   if (phone && pending) queue.accept.push({ requestId: pending.id, engineerId: phone.id });
-  const onSite = s.plant.requests.find((r) => r.engineerId === phone?.id && r.status === "on-site");
-  const plant = step(s.plant, { ...queue, startRepair: onSite ? [onSite.id] : [], nowMs: Date.now() });
+  const plant = step(s.plant, { ...queue, nowMs: Date.now() });
   queue = emptyQueue();
   useStore.setState({ plant });
 }
