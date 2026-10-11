@@ -3,7 +3,7 @@ import type {
 } from "../types";
 import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
 import {
-  FAILURE_ACTION, FAILURE_NAME, OSF_LIMIT, TWF_PER_ROW, TWF_WEAR_MIN, WINDOWS,
+  FAILURE_ACTION, FAILURE_NAME, WINDOWS,
   failureProbability, rowFeatures, shaftPowerW,
 } from "./model";
 
@@ -22,10 +22,6 @@ const SENSOR_STALE_MS = 15000;
 // The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
 export const REMOTE_STALE_MS = 15000;
 export const WATCH_RISK = 0.5;
-// Torque spread across the dataset, used to judge the chance that the next cut overstrains the tool.
-const TORQUE_MEAN = 40;
-const TORQUE_SD = 10;
-const WEAR_PER_ROW = 2.5;
 
 // The sensor board on the table feeds GT-08; every other unit replays the dataset.
 export const LIVE_SENSOR_UNIT = "GT-08";
@@ -119,73 +115,35 @@ function makeTurbine(i: number): Turbine {
   };
 }
 
-const normalTail = (z: number) => 0.5 * erfc(z / Math.SQRT2);
-function erfc(x: number) {
-  // Abramowitz and Stegun 7.1.26
-  const t = 1 / (1 + 0.3275911 * Math.abs(x));
-  const y = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
-  return x >= 0 ? y : 2 - y;
-}
-
-// Forecast for one unit from its current six features, using the dataset's own failure mechanics:
-// - the trained tree scores the current reading (catches heat dissipation and power failures as they form),
-// - overstrain: chance that an upcoming cut's torque crosses limit / wear as the tool keeps wearing,
-// - tool wear: the dataset's failure rate once a tool passes 200 minutes.
-export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Prediction {
+// The decision tree's verdict on the current reading. It stands in only while the ML service is unreachable.
+export function forecast(id: string, f: Features): Prediction {
   const probability = failureProbability(f);
-  return withLookahead(id, probability, f, wearPerRow, `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`, "Decision tree");
-}
-
-// A probability on the current reading, raised by the wear lookahead: the classifiers score one reading,
-// so on their own they can't say a worn tool is minutes from overstraining.
-function withLookahead(id: string, probability: number, f: Features, wearPerRow: number, detail: string, by: string): Prediction {
-  const limit = OSF_LIMIT[f.type];
-  const rowsPerMin = 60 / ROW_SECONDS;
-  const rate = Math.max(0.5, wearPerRow);
-
-  const rowRisk = (k: number) => {
-    const wear = f.toolWearMin + k * rate;
-    const osf = wear > 0 ? normalTail((limit / wear - TORQUE_MEAN) / TORQUE_SD) : 0;
-    const twf = wear >= TWF_WEAR_MIN ? TWF_PER_ROW : 0;
-    return { osf, twf };
-  };
-  let surviveOsf = 1, surviveTwf = 1;
-  let nextMinOsf = 0, nextMinTwf = 0;
-  let firstOsf: number | null = null, firstTwf: number | null = null;
-  for (let k = 1; k <= 20 * rowsPerMin; k++) {
-    const r = rowRisk(k);
-    surviveOsf *= 1 - r.osf;
-    surviveTwf *= 1 - r.twf;
-    if (k === rowsPerMin) { nextMinOsf = 1 - surviveOsf; nextMinTwf = 1 - surviveTwf; }
-    if (firstOsf === null && 1 - surviveOsf >= 0.5) firstOsf = k / rowsPerMin;
-    if (firstTwf === null && 1 - surviveTwf >= 0.5) firstTwf = k / rowsPerMin;
-  }
-  const strainPct = Math.round(((f.toolWearMin * TORQUE_MEAN) / limit) * 100);
-  const options = [
-    { mode: "OSF" as const, risk: nextMinOsf, min: firstOsf, detail: `Overstrain likely in about ${fmtMin(firstOsf)}: at ${Math.round(f.toolWearMin)} min of tool wear a typical cut is at ${strainPct}% of the ${limit.toLocaleString("en-US")} limit` },
-    { mode: "TWF" as const, risk: nextMinTwf, min: firstTwf, detail: f.toolWearMin >= TWF_WEAR_MIN ? `Tool at ${Math.round(f.toolWearMin)} min of wear, past its 200 min end of life` : `Tool reaches end of life in about ${fmtMin(firstTwf)} (${Math.round(f.toolWearMin)} of 200 min)` },
-  ];
-  const soonest = options.filter((o) => o.min !== null).sort((a, b) => (a.min ?? 0) - (b.min ?? 0))[0];
-  const worst = [...options].sort((a, b) => b.risk - a.risk)[0];
-  const risk = Math.min(1, Math.max(probability, worst.risk));
-  const lead = probability >= worst.risk && probability >= 0.3 ? null : soonest ?? worst;
   return {
     turbineId: id,
     probability,
-    mode: lead?.mode ?? null,
-    minutesToFailure: soonest?.min ?? null,
-    risk: Math.round(risk * 100) / 100,
-    detail: lead ? lead.detail : detail,
-    by,
+    mode: null,
+    minutesToFailure: null,
+    risk: Math.round(probability * 100) / 100,
+    detail: `Decision tree gives ${Math.round(probability * 100)}% failure probability on the current reading`,
+    by: "Decision tree",
   };
 }
 
-// The machine_learning service: when Model 1 flags a failure its diagnosis leads; otherwise its risk
-// goes through the same wear lookahead as the tree, which covers the tool-wear failures Model 1 misses.
-function fromService(r: RemotePrediction & { ml: NonNullable<RemotePrediction["ml"]> }, f: Features, wearPerRow: number): Prediction {
+// The machine_learning service: its diagnosis when Model 1 flags a failure, otherwise just its risk.
+// Nothing here projects a failure time; the models judge the current reading only.
+function fromService(r: RemotePrediction & { ml: NonNullable<RemotePrediction["ml"]> }): Prediction {
   const by = r.model || "Random Forest";
   if (r.ml.failureClass === 1) return { ...fromRemote(r), by, ml: r.ml };
-  return { ...withLookahead(r.unit, r.probability, f, wearPerRow, r.detail ?? `${by} gives ${Math.round(r.probability * 100)}% failure risk on the current reading`, by), ml: r.ml };
+  return {
+    turbineId: r.unit,
+    probability: r.probability,
+    mode: null,
+    minutesToFailure: null,
+    risk: Math.round(r.probability * 100) / 100,
+    detail: r.detail ?? `${by} gives ${Math.round(r.probability * 100)}% failure risk on the current reading`,
+    by,
+    ml: r.ml,
+  };
 }
 
 function fromRemote(r: RemotePrediction): Prediction {
@@ -203,8 +161,7 @@ function fromRemote(r: RemotePrediction): Prediction {
   };
 }
 
-function fmtMin(min: number | null) {
-  if (min === null) return "more than 20 min";
+function fmtMin(min: number) {
   return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${min.toFixed(1)} min`;
 }
 
@@ -256,7 +213,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const demandMw = demandAt(t, rnd);
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
   const advanceRow = t % ROW_SECONDS === 0;
-  const wearRate: Record<string, number> = {};
 
   for (const id of inputs.tripRequests ?? []) {
     const tb = turbines.find((x) => x.id === id);
@@ -275,7 +231,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
   for (const tb of turbines) {
     const i = unitIndex(tb);
-    const before = tb.features;
     const liveBoard = tb.id === LIVE_SENSOR_UNIT && board.source === "live" && board.features ? board.features : null;
     {
       if (tb.row === null) tb.row = startRow(i);
@@ -294,8 +249,6 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     }
     tb.measured = liveBoard ? (Object.keys(liveBoard).filter((k) => k !== "type") as (keyof Features)[]) : [];
     if (liveBoard) tb.features = { ...(tb.row === null ? tb.features : rowFeatures(tb.row)), ...liveBoard };
-    const grew = tb.features.toolWearMin - before.toolWearMin;
-    wearRate[tb.id] = grew > 0 && grew < 20 ? grew : WEAR_PER_ROW;
     tb.shaftPowerKw = shaftPowerW(tb.features) / 1000;
     tb.capacityMw = tb.ratedMw * derateFactor(tb.features.airTempK);
   }
@@ -318,8 +271,8 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     .filter((x) => x.status !== "tripped" && x.status !== "offline")
     .map((x) => {
       const r = remoteFresh ? remotes.find((p) => p.unit === x.id) : undefined;
-      if (!r) return forecast(x.id, x.features, wearRate[x.id]);
-      return r.ml ? fromService({ ...r, ml: r.ml }, x.features, wearRate[x.id]) : fromRemote(r);
+      if (!r) return forecast(x.id, x.features);
+      return r.ml ? fromService({ ...r, ml: r.ml }) : fromRemote(r);
     })
     .sort((a, b) => b.risk - a.risk);
 
