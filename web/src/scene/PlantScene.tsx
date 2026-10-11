@@ -34,6 +34,8 @@ const BUS_Z = -86;
 const SWITCHYARD = { x: 152, z: -45 };
 
 // Large assets need the camera further back, and the condenser reads best from the open south-west side.
+// Focus stops far enough out that the asset's label and its surroundings stay in view.
+const FOCUS_PULLBACK = 2.6;
 const CAMERA_OFFSET: Record<string, V3> = {
   acc: [-70, 70, 95],
   datacenter: [60, 70, 120],
@@ -60,8 +62,30 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
     if (!p) return;
     const off = CAMERA_OFFSET[selected ?? ""] ?? [40, 42, 64];
     goal.current = new THREE.Vector3(p[0], 6, p[2]);
-    camGoal.current = new THREE.Vector3(p[0] + off[0], off[1], p[2] + off[2]);
+    camGoal.current = new THREE.Vector3(p[0] + off[0] * FOCUS_PULLBACK, off[1] * FOCUS_PULLBACK, p[2] + off[2] * FOCUS_PULLBACK);
   }, [selected]);
+  // Any drag or scroll hands the camera back to the user, so the fly-in never fights a zoom.
+  const el = useThree((s) => s.events.connected as HTMLElement | null);
+  useEffect(() => {
+    if (!el) return;
+    const stop = () => { goal.current = null; camGoal.current = null; };
+    let down: [number, number] | null = null;
+    const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
+    const onMove = (e: PointerEvent) => {
+      if (down && e.buttons && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) { stop(); down = null; }
+    };
+    const onUp = () => { down = null; };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [el]);
   const preset = useStore((s) => s.cameraPreset);
   useEffect(() => {
     if (!preset) return;

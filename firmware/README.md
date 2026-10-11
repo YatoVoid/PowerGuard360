@@ -45,6 +45,16 @@ Content-Type: application/json
 ## Secrets
 Wi-Fi password, `SERVER_URL` and `DEVICE_TOKEN` go in `secrets.h`, which git ignores. Commit `secrets.example.h` with blank values instead.
 
+## Without a board
+`server/src/board-sim.ts` sends real AI4I 2020 rows in this exact format once a second, so the rest of the system can be shown without hardware.
+
+```
+cd server
+npm run board                                        # steady readings
+npm run board -- HDF                                 # 40 s lead-in to a recorded heat dissipation failure (also OSF, PWF, TWF)
+ML_URL=http://<ml-laptop>:<port>/<path> npm run board -- OSF   # also send each reading to the ML laptop
+```
+
 ## Until the server is up
 Print the JSON to Serial Monitor at 115200 baud, one line per reading. The laptop can forward that line over USB if the venue Wi-Fi blocks the board, so keep the serial output in the same JSON even after POST works.
 

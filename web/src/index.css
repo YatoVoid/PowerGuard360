@@ -175,6 +175,7 @@ h1, h2, h3, h4 { margin: 0; }
 .strip-wrap { container-type: inline-size; }
 /* Below this width "wear 134 min" no longer fits eight across. */
 @container (max-width: 780px) { .strip { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (max-width: 900px) { .unit-meta { font-size: 11px; letter-spacing: -0.02em; } }
 .unit {
   width: 100%; min-width: 0; display: grid; gap: 2px; text-align: left; padding: 9px 9px 10px; cursor: pointer;
   background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-s);

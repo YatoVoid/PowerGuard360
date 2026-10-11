@@ -5,6 +5,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
+    "board": "tsx --env-file=.env src/board-sim.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
