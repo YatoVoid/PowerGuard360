@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
-import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from "../sim/engine";
-import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from "../types";
+import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
+import { FAILURE_NAME, MODEL_METRICS } from "../sim/model";
+import type { Features, HistoryPoint, MaintenanceRequest, PlantEvent, Source, Turbine } from "../types";
+import { assetLabel } from "../sim/site";
+import { useCopilot } from "../copilot";
 
 export const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -15,11 +18,12 @@ export function SourceTag({ source }: { source: Source }) {
   return <span className={`src src-${source}`}>{source === "live" ? "Live sensor" : "Simulated"}</span>;
 }
 
-export function Panel({ title, aside, children, className = "" }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function Panel({ title, meta, aside, children, className = "" }: { title: string; meta?: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <section className={`panel ${className}`}>
       <header className="panel-head">
         <h2>{title}</h2>
+        {meta && <span className="panel-meta">{meta}</span>}
         {aside}
       </header>
       {children}
@@ -112,12 +116,59 @@ export function BalanceStats() {
   );
 }
 
+export function UnitLoadBars() {
+  const turbines = useStore((s) => s.plant.turbines);
+  const select = useStore((s) => s.select);
+  return (
+    <ul className="loadbars">
+      {turbines.map((tb) => {
+        const pct = (tb.outputMw / tb.ratedMw) * 100;
+        const cap = (tb.capacityMw / tb.ratedMw) * 100;
+        return (
+          <li key={tb.id}>
+            <button type="button" onClick={() => select(tb.id)} className={`loadbar loadbar-${tb.status}`}>
+              <span className="loadbar-id">{tb.id}</span>
+              <span className="loadbar-track" aria-hidden>
+                <span className="loadbar-fill" style={{ transform: `scaleX(${pct / 100})` }} />
+                <span className="loadbar-cap" style={{ left: `${cap}%` }} title="Available capacity at current inlet air" />
+              </span>
+              <span className="loadbar-val">{fmt(pct, 1)}%</span>
+            </button>
+          </li>
+        );
+      })}
+      <li className="loadbar-legend" aria-hidden><span className="cap-key" />Available capacity at current inlet air</li>
+    </ul>
+  );
+}
+
+const K = 273.15;
+const kAndC = (k: number) => `${fmt(k, 1)} K (${fmt(k - K, 1)} °C)`;
+
+export function FeatureList({ f }: { f: Features }) {
+  return (
+    <dl className="kv">
+      <div><dt>Type (quality grade)</dt><dd>{f.type}</dd></div>
+      <div><dt>Air temperature</dt><dd>{kAndC(f.airTempK)}</dd></div>
+      <div><dt>Process temperature</dt><dd>{kAndC(f.processTempK)}</dd></div>
+      <div><dt>Rotational speed</dt><dd>{fmt(f.rpm)} rpm</dd></div>
+      <div><dt>Torque</dt><dd>{fmt(f.torqueNm, 1)} Nm</dd></div>
+      <div><dt>Tool wear</dt><dd>{fmt(f.toolWearMin)} min</dd></div>
+    </dl>
+  );
+}
+
 export function TurbineDetail({ tb }: { tb: Turbine }) {
-  const temps = useStore((s) => s.plant.tempHistory[tb.id] ?? []);
+  const risk = useStore((s) => s.plant.riskHistory[tb.id] ?? []);
   const pred = useStore((s) => s.plant.predictions.find((p) => p.turbineId === tb.id));
   const trip = useStore((s) => s.trip);
   const reset = useStore((s) => s.reset);
   const canTrip = tb.status === "running" || tb.status === "watch";
+  const live = useStore((s) => s.link === "live");
+  const ask = useCopilot((s) => s.ask);
+  const question = tb.status === "tripped" ? `Why did ${tb.id} trip, and what should the engineer check?`
+    : pred && pred.risk >= 0.2 ? `Why is ${tb.id} at risk, and what should we do?`
+    : `How is ${tb.id} doing?`;
   return (
     <div className="detail">
       <div className="detail-head">
@@ -126,31 +177,26 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
       </div>
       {tb.tripCause && <p className="cause">{tb.tripCause}</p>}
       <dl className="kv">
-        <div><dt>Output</dt><dd>{fmt(tb.outputMw)} / {fmt(tb.capacityMw)} MW</dd></div>
-        <div className={tb.exhaustTempC >= WATCH_TEMP_C ? "is-watch" : ""}><dt>Exhaust temp</dt><dd>{fmt(tb.exhaustTempC)} °C</dd></div>
-        <div><dt>Vibration</dt><dd>{fmt(tb.vibrationMmS, 1)} mm/s</dd></div>
-        <div><dt>Speed</dt><dd>{fmt(tb.rpm)} rpm</dd></div>
-        <div><dt>Fuel flow</dt><dd>{fmt(tb.fuelFlowKgS, 1)} kg/s</dd></div>
-        <div><dt>Efficiency</dt><dd>{fmt(tb.efficiencyPct, 1)} %</dd></div>
-        <div><dt>Run hours</dt><dd>{fmt(tb.runHours)}</dd></div>
+        <div><dt>Electrical output</dt><dd>{fmt(tb.outputMw)} / {fmt(tb.capacityMw)} MW</dd></div>
+        <div><dt>Shaft power (torque × speed)</dt><dd>{fmt(tb.shaftPowerKw, 2)} kW</dd></div>
       </dl>
       <div className="sensor-head">
-        <h4 className="sub">Unit sensors</h4>
-        <SourceTag source={tb.sensors.source} />
+        <h4 className="sub">Machine readings</h4>
+        <SourceTag source={tb.source} />
       </div>
-      <dl className="kv">
-        <div><dt>Inlet pressure</dt><dd>{fmt(tb.sensors.inletPressureHpa, 1)} hPa</dd></div>
-        <div><dt>Inlet air temp</dt><dd>{fmt(tb.sensors.inletTempC, 1)} °C</dd></div>
-        <div><dt>Air quality (raw)</dt><dd>{fmt(tb.sensors.airQualityRaw)}</dd></div>
-        <div><dt>Flame detector</dt><dd>{fmt(tb.sensors.flameRaw)}</dd></div>
-      </dl>
-      {tb.id === LIVE_SENSOR_UNIT && tb.sensors.source === "sim" && <p className="note">Connect the sensor board to drive these readings live.</p>}
+      <FeatureList f={tb.features} />
+      <p className="note">
+        {tb.source === "live" ? "Measured live by the sensor board." : `Dataset row ${tb.row === null ? "" : (tb.row + 1).toLocaleString("en-US")} of the AI4I 2020 data.`}
+        {tb.id === LIVE_SENSOR_UNIT && tb.source === "sim" && " Connect the sensor board to drive these readings live."}
+      </p>
       <div className="trend-row">
-        <span>Exhaust temp, last 3 min</span>
-        <Spark values={temps} lo={540} hi={TRIP_TEMP_C + 5} warn={WATCH_TEMP_C} />
+        <span>Failure risk, last 3 min</span>
+        <Spark values={risk} lo={0} hi={1} warn={WATCH_RISK} />
       </div>
-      {pred && pred.minutesToLimit !== null && (
-        <p className="forecast">Reaches the {TRIP_TEMP_C} °C trip limit in about {fmt(pred.minutesToLimit, 1)} min at the current trend.</p>
+      {pred && pred.risk >= 0.2 && <p className="forecast">{pred.detail}</p>}
+      {live && <button type="button" className="link forecast-ask" onClick={() => ask(question, tb.id)}>Ask Copilot: {question}</button>}
+      {pred && (
+        <p className="note">{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</p>
       )}
       <div className="actions">
         {canTrip && <button type="button" className="btn btn-danger" onClick={() => trip(tb.id)}>Trip {tb.id}</button>}
@@ -161,6 +207,77 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
 }
 
 export function AssetDetail() {
+  const selected = useStore((s) => s.selected);
+  const fallback = useStore((s) => s.plant.predictions[0]?.turbineId ?? "GT-01");
+  const asset = selected ?? fallback;
+  return (
+    <>
+      <AssetBody />
+      <MaintenanceBox asset={asset} />
+    </>
+  );
+}
+
+const STATUS_TEXT: Record<MaintenanceRequest["status"], string> = {
+  open: "Waiting for an engineer",
+  dispatched: "Sent to engineer, waiting for accept",
+  "en-route": "Engineer walking to the asset",
+  "on-site": "Engineer on site",
+  repairing: "Repair in progress",
+  resolved: "Resolved",
+  cancelled: "Cancelled",
+};
+export const requestStatusText = (r: MaintenanceRequest) => STATUS_TEXT[r.status];
+
+export function etaText(min: number) {
+  return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${fmt(min, 1)} min`;
+}
+
+export function PriorityChip({ p }: { p: MaintenanceRequest["priority"] }) {
+  return <span className={`prio prio-${p.toLowerCase()}`}>{p}</span>;
+}
+
+function MaintenanceBox({ asset }: { asset: string }) {
+  const req = useStore((s) => s.plant.requests.find((r) => r.asset === asset && r.status !== "resolved" && r.status !== "cancelled"));
+  const engineer = useStore((s) => (req ? s.plant.engineers.find((e) => e.id === req.engineerId) : undefined));
+  const act = useStore((s) => s.act);
+  const [reason, setReason] = useState("");
+  return (
+    <div className="maint-box">
+      <h4 className="sub">Maintenance</h4>
+      {req ? (
+        <>
+          <div className="maint-line">
+            <PriorityChip p={req.priority} />
+            <strong>{req.id}</strong>
+            <span className="maint-origin">{req.origin === "auto" ? "raised by sensors" : "requested manually"}</span>
+          </div>
+          <p className="maint-reason">{req.reason}</p>
+          <dl className="kv">
+            <div><dt>Status</dt><dd>{requestStatusText(req)}</dd></div>
+            <div><dt>Engineer</dt><dd>{engineer?.name ?? "Not assigned"}</dd></div>
+            {req.status !== "open" && <div><dt>Fixed in</dt><dd>{etaText(req.etaMin)}</dd></div>}
+          </dl>
+          {req.status === "repairing" && (
+            <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${1 - req.repairLeftS / REPAIR_S})` }} /></div>
+          )}
+          <div className="actions"><button type="button" className="btn" onClick={() => act({ type: "cancel", requestId: req.id })}>Cancel request</button></div>
+        </>
+      ) : (
+        <form
+          className="maint-form"
+          onSubmit={(e) => { e.preventDefault(); act({ type: "request", asset, reason }); setReason(""); }}
+        >
+          <label htmlFor={`reason-${asset}`}>No open request for {assetLabel(asset)}.</label>
+          <input id={`reason-${asset}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What should the engineer check? (optional)" maxLength={200} />
+          <button type="submit" className="btn btn-primary">Request engineer</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+function AssetBody() {
   const selected = useStore((s) => s.selected);
   const plant = useStore((s) => s.plant);
   if (!selected) {
@@ -197,44 +314,24 @@ export function AssetDetail() {
           <div><dt>Power to data center</dt><dd>{fmt(plant.demandMw)} MW</dd></div>
           <div><dt>From turbines</dt><dd>{fmt(plant.outputMw)} MW</dd></div>
           <div className={plant.gridMw > 1 ? "is-watch" : ""}><dt>Grid tie</dt><dd>{plant.gridMw > 1 ? `importing ${fmt(plant.gridMw)} MW` : "standby"}</dd></div>
-          <div><dt>Voltage</dt><dd>345 kV</dd></div>
-          <div><dt>Breakers closed</dt><dd>9 / 9</dd></div>
         </dl>
         <p className="note">Steps turbine power up to transmission voltage and routes it to the data center. The grid tie only carries power when the plant falls short.</p>
       </div>
     );
   }
   if (selected === "gas") {
-    const kgS = plant.turbines.reduce((sum, t) => sum + t.fuelFlowKgS, 0);
-    // 47 MJ/kg lower heating value, 1,055 MJ per MMBtu
-    const mmbtuH = (kgS * 47 * 3600) / 1055;
     return (
       <div className="detail">
         <div className="detail-head"><h3>Gas metering</h3></div>
-        <dl className="kv">
-          <div><dt>Fuel flow</dt><dd>{fmt(kgS, 1)} kg/s</dd></div>
-          <div><dt>Heat input</dt><dd>{fmt(mmbtuH)} MMBtu/h</dd></div>
-          <div><dt>Units burning gas</dt><dd>{plant.turbines.filter((t) => t.fuelFlowKgS > 0).length} / {plant.turbines.length}</dd></div>
-        </dl>
-        <p className="note">Permian Basin gas from the pipeline is measured here before it reaches the turbines.</p>
+        <p className="note">Pipeline gas is measured here before it reaches the turbines. The dataset has no gas readings, so this asset has no live values yet.</p>
       </div>
     );
   }
   if (selected === "acc") {
-    const load = Math.min(1, plant.outputMw / 2700);
-    // Simulated: in a combined cycle the steam turbine makes roughly a third of plant output,
-    // and the condenser rejects about 1.6 MW of heat per MW the steam turbine makes.
-    const stMw = plant.outputMw / 3;
     return (
       <div className="detail">
         <div className="detail-head"><h3>Air-cooled condenser</h3></div>
-        <dl className="kv">
-          <div><dt>Fans running</dt><dd>18 / 18</dd></div>
-          <div><dt>Fan speed</dt><dd>{fmt(30 + 70 * load)} %</dd></div>
-          <div><dt>Heat rejected</dt><dd>{fmt(stMw * 1.6)} MW</dd></div>
-          <div><dt>Ambient air</dt><dd>{fmt(plant.ambient.temperatureC, 1)} °C</dd></div>
-        </dl>
-        <p className="note">Turns the steam turbine's exhaust back into water using air instead of a cooling tower, which saves water in West Texas.</p>
+        <p className="note">Turns the steam turbine's exhaust back into water using air instead of a cooling tower, which saves water in West Texas. The dataset has no condenser readings, so this asset has no live values yet.</p>
       </div>
     );
   }
@@ -252,48 +349,7 @@ export function AssetDetail() {
       </div>
     );
   }
-  const sh = plant.shipments.find((x) => x.id === selected);
-  if (sh) return <ShipmentDetail id={sh.id} />;
   return null;
-}
-
-export function DeliveryInfo({ d }: { d: Delivery }) {
-  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
-  return (
-    <div className="delivery">
-      <h4 className="sub">On site</h4>
-      <p className="delivery-line">
-        {d.status === "unloading" && <>{d.crew} ({d.workers} people) unloading at the dock. Parts reach the {d.toLabel} in {eta}.</>}
-        {d.status === "carrying" && <>{d.crew} ({d.workers} people) carrying the parts to the {d.toLabel}. Arrives in {eta}.</>}
-        {d.status === "delivered" && <>{d.crew} delivered the parts to the {d.toLabel}.</>}
-      </p>
-      {d.status !== "delivered" && (
-        <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${d.status === "unloading" ? 0 : d.progress})` }} /></div>
-      )}
-    </div>
-  );
-}
-
-export function ShipmentDetail({ id }: { id: string }) {
-  const sh = useStore((s) => s.plant.shipments.find((x) => x.id === id));
-  const delivery = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === id));
-  if (!sh) return null;
-  return (
-    <div className="detail">
-      <div className="detail-head">
-        <h3>{sh.id}</h3>
-        <SourceTag source={sh.source} />
-      </div>
-      <p className="cause">{sh.cargo}</p>
-      <dl className="kv">
-        <div><dt>Carrier</dt><dd>{sh.carrier}</dd></div>
-        <div><dt>Distance left</dt><dd>{sh.arrived ? "On site" : `${fmt(sh.remainingKm, 1)} km`}</dd></div>
-        <div><dt>ETA</dt><dd>{sh.arrived ? "Arrived" : `${fmt(sh.etaMin)} min`}</dd></div>
-        <div><dt>Position</dt><dd>{fmt(sh.lat, 4)}, {fmt(sh.lon, 4)}</dd></div>
-      </dl>
-      {delivery && <DeliveryInfo d={delivery} />}
-    </div>
-  );
 }
 
 export function AlarmList({ events, limit = 8, empty = "No alarms." }: { events: PlantEvent[]; limit?: number; empty?: string }) {
@@ -316,7 +372,7 @@ export function TurbineStrip() {
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
   return (
-    <ul className="strip" aria-label="Turbine fleet">
+    <div className="strip-wrap"><ul className="strip" aria-label="Turbine fleet">
       {turbines.map((tb) => (
         <li key={tb.id}>
           <button
@@ -327,55 +383,52 @@ export function TurbineStrip() {
           >
             <span className="unit-id">{tb.id}</span>
             <span className="unit-mw">{tb.status === "running" || tb.status === "watch" ? fmt(tb.outputMw) : "0"}<small> MW</small></span>
-            <span className="unit-meta">{tb.status === "running" ? `${fmt(tb.exhaustTempC)} °C` : tb.status}</span>
+            <span className="unit-meta">{tb.status === "running" || tb.status === "watch" ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status[0].toUpperCase() + tb.status.slice(1)}</span>
             <span className="unit-bar"><span style={{ transform: `scaleX(${tb.outputMw / tb.ratedMw})` }} /></span>
           </button>
         </li>
       ))}
-    </ul>
+    </ul></div>
   );
 }
 
 export function PredictionList() {
   const preds = useStore((s) => s.plant.predictions);
   const select = useStore((s) => s.select);
-  const flagged = preds.filter((p) => p.minutesToLimit !== null || p.risk > 0.2);
+  const flagged = preds.filter((p) => p.risk >= 0.2 || (p.minutesToFailure !== null && p.minutesToFailure <= 5));
   return (
     <>
       {flagged.length === 0 ? (
-        <p className="empty">No turbine is trending toward a limit.</p>
+        <p className="empty">No unit is heading toward a failure in the next few minutes.</p>
       ) : (
         <ul className="preds">
           {flagged.map((p) => (
             <li key={p.turbineId}>
               <button type="button" onClick={() => select(p.turbineId)}>
                 <strong>{p.turbineId}</strong>
-                <span>Overheat {p.minutesToLimit !== null ? `in ~${fmt(p.minutesToLimit, 1)} min` : "risk rising"}</span>
+                <span>{p.mode ? `${FAILURE_NAME[p.mode]}${p.minutesToFailure !== null ? ` in ~${fmt(p.minutesToFailure, 1)} min` : ""}` : `${Math.round(p.probability * 100)}% failure probability`}{p.by !== "Decision tree" && ` (${p.by})`}</span>
                 <meter min={0} max={1} low={0.3} high={0.6} optimum={0} value={p.risk} aria-label={`Risk ${Math.round(p.risk * 100)}%`} />
               </button>
             </li>
           ))}
         </ul>
       )}
-      <p className="note">Trend extrapolation on exhaust temperature. Replaced by the trained model once real turbine data is in.</p>
+      <p className="note">
+        Decision tree trained on {MODEL_METRICS.train_rows.toLocaleString("en-US")} rows of the AI4I 2020 dataset. On {MODEL_METRICS.test_rows.toLocaleString("en-US")} rows it never saw, it caught {Math.round(MODEL_METRICS.recall * 100)}% of failures at {Math.round(MODEL_METRICS.precision * 100)}% precision. Tool wear projections cover the failures it can't see coming.
+      </p>
     </>
   );
 }
 
 export function SensorPanel() {
-  const a = useStore((s) => s.plant.ambient);
+  const board = useStore((s) => s.plant.board);
   return (
     <>
-      <dl className="kv">
-        <div><dt>Barometric pressure</dt><dd>{fmt(a.pressureHpa, 1)} hPa</dd></div>
-        <div><dt>Ambient temp</dt><dd>{fmt(a.temperatureC, 1)} °C</dd></div>
-        <div><dt>Air quality (raw)</dt><dd>{fmt(a.airQualityRaw)}</dd></div>
-        <div><dt>Flame detector (light)</dt><dd>{fmt(a.lightRaw)}</dd></div>
-      </dl>
+      {board.features ? <FeatureList f={board.features} /> : <p className="empty">No readings received yet.</p>}
       <p className="note">
-        {a.source === "live"
-          ? `Live readings from the sensor board feed ${LIVE_SENSOR_UNIT}. Its pressure and temperature set ${LIVE_SENSOR_UNIT}'s capacity, and covering the light sensor trips it.`
-          : `No sensor board connected. ${LIVE_SENSOR_UNIT} is showing simulated readings like the other units.`}
+        {board.source === "live"
+          ? `The board's six readings drive ${LIVE_SENSOR_UNIT} directly. Readings that break the dataset's failure rules trip it.`
+          : `Not connected. ${LIVE_SENSOR_UNIT} is replaying the dataset like the other units until the board posts readings.`}
       </p>
     </>
   );

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "node"
+    ],
+    "resolveJsonModule": true
+  },
+  "include": [
+    "src",
+    "../web/src/sim/engine.ts",
+    "../web/src/sim/site.ts",
+    "../web/src/types.ts",
+    "../web/src/sim/model.ts",
+    "../web/src/data/ai4i.json",
+    "../web/src/data/model.json"
+  ]
+}

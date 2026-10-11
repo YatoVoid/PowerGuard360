@@ -1,32 +1,52 @@
 import type {
-  Ambient, Delivery, HistoryPoint, PlantEvent, PlantState, Prediction, Severity, Shipment, StepInputs, Turbine, TurbineSensors,
+  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, RemotePrediction, Severity, StepInputs, Turbine,
 } from "../types";
-import { deliveryTarget, pathLength, pointOnPath } from "./site";
+import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
+import {
+  FAILURE_NAME, HDF_GAP_K, HDF_RPM, OSF_LIMIT, PWF_MAX_W, PWF_MIN_W, TWF_PER_ROW, TWF_WEAR_MIN, WINDOWS,
+  failureProbability, rowFailure, rowFeatures, shaftPowerW,
+} from "./model";
 
-// All plant numbers here are illustrative. Real turbine data replaces this module's output later;
-// the screens only read PlantState.
+// Machine readings come from the AI4I 2020 dataset (see data/README.md). Only power demand and turbine
+// output are modelled, because the dataset has no power-plant load.
 
 export const RATED_MW = 335;
 export const TURBINE_COUNT = 8;
-export const WATCH_TEMP_C = 640;
-export const TRIP_TEMP_C = 660;
-export const LIGHT_TRIP_THRESHOLD = 300;
-const RAMP_MW_PER_S = 18;
+// One dataset row is replayed per unit every few seconds.
+export const ROW_SECONDS = 8;
 const HISTORY_LEN = 300;
-const TEMP_HISTORY_LEN = 180;
+const RISK_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
-export const SHIPMENT_REPLAY_SPEED = 12;
-export const GEOFENCE_KM = 3;
-// The sensor board on the table feeds GT-08; every other unit's sensors are simulated.
+// The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
+const REMOTE_STALE_MS = 15000;
+// Raise a P3 request when a failure is forecast within this many minutes.
+export const REQUEST_LEAD_MIN = 2;
+export const WATCH_RISK = 0.5;
+// Torque spread across the dataset, used to judge the chance that the next cut overstrains the tool.
+const TORQUE_MEAN = 40;
+const TORQUE_SD = 10;
+const WEAR_PER_ROW = 2.5;
+
+// The sensor board on the table feeds GT-08; every other unit replays the dataset.
 export const LIVE_SENSOR_UNIT = "GT-08";
-// Walking pace on site, replayed faster for the demo the same way the trucks are.
+// Walking pace on site, replayed faster for the demo.
 export const WALK_M_PER_S = 1.3;
 export const SITE_REPLAY_SPEED = 3;
-const UNLOAD_S = 20;
-const CREWS = ["Crew A", "Crew B", "Crew C"];
+export const REPAIR_S = 25;
+const SIM_ACCEPT_S = 4;
+// After a fix, give the readings time to settle before the forecast can raise a new request.
+const FIX_COOLDOWN_S = 120;
+const PRIORITY_RANK: Record<Priority, number> = { P1: 0, P2: 1, P3: 2 };
 
-export const SITE_LON_LAT: [number, number] = [-103.56, 31.37];
+export const PHONE_ENGINEER = "ENG-1";
+function initialEngineers(): Engineer[] {
+  return [
+    { id: PHONE_ENGINEER, name: "Phone engineer", kind: "phone", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-2", name: "R. Alvarez", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+    { id: "ENG-3", name: "J. Chen", kind: "sim", status: "available", requestId: null, pos: CONTROL_ROOM, autoWalk: false, lastStepT: null },
+  ];
+}
 
 export function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -48,29 +68,9 @@ export function haversineKm(a: [number, number], b: [number, number]) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export function routeLengthKm(route: [number, number][]) {
-  let km = 0;
-  for (let i = 1; i < route.length; i++) km += haversineKm(route[i - 1], route[i]);
-  return km;
-}
-
-export function pointAlong(route: [number, number][], progress: number): [number, number] {
-  const total = routeLengthKm(route);
-  let target = Math.min(Math.max(progress, 0), 1) * total;
-  for (let i = 1; i < route.length; i++) {
-    const seg = haversineKm(route[i - 1], route[i]);
-    if (target <= seg || i === route.length - 1) {
-      const f = seg === 0 ? 0 : Math.min(target / seg, 1);
-      return [route[i - 1][0] + (route[i][0] - route[i - 1][0]) * f, route[i - 1][1] + (route[i][1] - route[i - 1][1]) * f];
-    }
-    target -= seg;
-  }
-  return route[route.length - 1];
-}
-
-// Gas turbine output falls with air density: lower pressure and hotter air both cut capacity.
-export function derateFactor(pressureHpa: number, temperatureC: number) {
-  return Math.max(0.6, Math.min(1.05, (pressureHpa / 1013.25) * (1 - 0.006 * (temperatureC - 15))));
+// Gas turbines lose roughly 0.6% of output per degree of inlet air above 15 °C.
+export function derateFactor(airTempK: number) {
+  return Math.max(0.6, Math.min(1.05, 1 - 0.006 * (airTempK - 273.15 - 15)));
 }
 
 function demandAt(t: number, rnd: () => number) {
@@ -81,7 +81,24 @@ function demandAt(t: number, rnd: () => number) {
   return slow + burst + (rnd() - 0.5) * 24;
 }
 
+const unitIndex = (tb: Turbine) => Number(tb.id.slice(3)) - 1;
+
+// Where each unit starts in its tool life, staggered so units don't all reach end of life together.
+// GT-03 starts close enough to its recorded overstrain failure for the forecast to matter early in a demo.
+function startRow(i: number) {
+  const [start, end] = WINDOWS[i];
+  if (i === 2) return Math.max(start, end - 1 - 48);
+  return start + Math.floor(((i * 17) % 40) / 100 * (end - start));
+}
+
+function fitNewTool(tb: Turbine) {
+  tb.row = WINDOWS[unitIndex(tb)][0];
+  tb.features = rowFeatures(tb.row);
+}
+
 function makeTurbine(i: number): Turbine {
+  const row = startRow(i);
+  const features = rowFeatures(row);
   return {
     id: `GT-${String(i + 1).padStart(2, "0")}`,
     status: "running",
@@ -89,77 +106,104 @@ function makeTurbine(i: number): Turbine {
     outputMw: 260,
     capacityMw: RATED_MW,
     ratedMw: RATED_MW,
-    exhaustTempC: 585 + i * 1.5,
-    vibrationMmS: 2.4 + (i % 3) * 0.3,
-    rpm: 3600,
-    fuelFlowKgS: 15,
-    efficiencyPct: 38.5,
-    runHours: 4200 + i * 611,
-    sensors: { inletPressureHpa: 1009.2 + (i % 3) * 0.2, inletTempC: 32 + (i % 4) * 0.4, airQualityRaw: 130 + i * 4, flameRaw: 2780, source: "sim" },
-  };
-}
-
-function simSensors(tb: Turbine, i: number, t: number, rnd: () => number, running: boolean): TurbineSensors {
-  return {
-    inletPressureHpa: 1009.2 + 0.6 * Math.sin(t / 400) + (i % 3) * 0.2 + (rnd() - 0.5) * 0.1,
-    inletTempC: 32 + (i % 4) * 0.4 + 0.8 * Math.sin(t / 600) + (rnd() - 0.5) * 0.2,
-    airQualityRaw: Math.max(40, tb.sensors.airQualityRaw + (130 + i * 4 - tb.sensors.airQualityRaw) * 0.05 + (rnd() - 0.5) * 5),
-    flameRaw: running ? 2780 + (rnd() - 0.5) * 60 : 40,
+    features,
+    shaftPowerKw: shaftPowerW(features) / 1000,
     source: "sim",
+    row,
   };
 }
 
-type NamedPoint = { name?: string; at: [number, number] };
-
-const MIDLAND_ROUTE: NamedPoint[] = [
-  { name: "Midland", at: [-102.078, 31.997] }, { name: "Odessa", at: [-102.368, 31.845] }, { at: [-102.62, 31.72] },
-  { name: "Monahans", at: [-102.892, 31.594] }, { at: [-103.127, 31.538] }, { at: [-103.31, 31.47] },
-  { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
-];
-const FORT_STOCKTON_ROUTE: NamedPoint[] = [
-  { name: "Fort Stockton", at: [-102.879, 30.894] }, { at: [-103.02, 30.98] }, { at: [-103.2, 31.12] },
-  { at: [-103.36, 31.27] }, { name: "Pecos", at: [-103.493, 31.423] }, { name: "Plant", at: SITE_LON_LAT },
-];
-
-function makeShipment(
-  id: string, cargo: string, forAsset: string, carrier: string, points: NamedPoint[], speedKmh: number, startProgress: number,
-): Shipment {
-  const route = points.map((p) => p.at);
-  const total = routeLengthKm(route);
-  const stops: Shipment["stops"] = [];
-  let km = 0;
-  points.forEach((p, i) => {
-    if (i > 0) km += haversineKm(points[i - 1].at, p.at);
-    if (p.name) stops.push({ name: p.name, at: km / total });
-  });
-  const [lon, lat] = pointAlong(route, startProgress);
-  const remainingKm = total * (1 - startProgress);
-  return {
-    id, cargo, forAsset, carrier, route, stops,
-    origin: points[0].name ?? "",
-    progress: startProgress,
-    speedKmh,
-    source: "sim",
-    lat, lon,
-    remainingKm,
-    etaMin: (remainingKm / (speedKmh * SHIPMENT_REPLAY_SPEED)) * 60,
-    arrived: false,
-    lastPingT: null,
-  };
+const normalTail = (z: number) => 0.5 * erfc(z / Math.SQRT2);
+function erfc(x: number) {
+  // Abramowitz and Stegun 7.1.26
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
+  return x >= 0 ? y : 2 - y;
 }
 
-export function initialShipments(): Shipment[] {
-  return [
-    makeShipment("TRL-204", "Combustion liner set", "GT-03", "Permian Freight", MIDLAND_ROUTE, 96, 0),
-    makeShipment("TNK-118", "Turbine lube oil, 6,000 gal", "Lube oil system", "Basin Fluids", MIDLAND_ROUTE.slice(1), 88, 0.3),
-    makeShipment("TRL-311", "Replacement battery modules (12)", "battery", "Trans-Pecos Haul", FORT_STOCKTON_ROUTE, 80, 0.12),
+// Forecast for one unit from its current six features, using the dataset's own failure mechanics:
+// - the trained tree scores the current reading (catches heat dissipation and power failures as they form),
+// - overstrain: chance that an upcoming cut's torque crosses limit / wear as the tool keeps wearing,
+// - tool wear: the dataset's failure rate once a tool passes 200 minutes.
+export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Prediction {
+  const probability = failureProbability(f);
+  const limit = OSF_LIMIT[f.type];
+  const rowsPerMin = 60 / ROW_SECONDS;
+  const rate = Math.max(0.5, wearPerRow);
+
+  const rowRisk = (k: number) => {
+    const wear = f.toolWearMin + k * rate;
+    const osf = wear > 0 ? normalTail((limit / wear - TORQUE_MEAN) / TORQUE_SD) : 0;
+    const twf = wear >= TWF_WEAR_MIN ? TWF_PER_ROW : 0;
+    return { osf, twf };
+  };
+  let surviveOsf = 1, surviveTwf = 1;
+  let nextMinOsf = 0, nextMinTwf = 0;
+  let firstOsf: number | null = null, firstTwf: number | null = null;
+  for (let k = 1; k <= 20 * rowsPerMin; k++) {
+    const r = rowRisk(k);
+    surviveOsf *= 1 - r.osf;
+    surviveTwf *= 1 - r.twf;
+    if (k === rowsPerMin) { nextMinOsf = 1 - surviveOsf; nextMinTwf = 1 - surviveTwf; }
+    if (firstOsf === null && 1 - surviveOsf >= 0.5) firstOsf = k / rowsPerMin;
+    if (firstTwf === null && 1 - surviveTwf >= 0.5) firstTwf = k / rowsPerMin;
+  }
+  const strainPct = Math.round(((f.toolWearMin * TORQUE_MEAN) / limit) * 100);
+  const options = [
+    { mode: "OSF" as const, risk: nextMinOsf, min: firstOsf, detail: `Overstrain likely in about ${fmtMin(firstOsf)}: at ${Math.round(f.toolWearMin)} min of tool wear a typical cut is at ${strainPct}% of the ${limit.toLocaleString("en-US")} limit` },
+    { mode: "TWF" as const, risk: nextMinTwf, min: firstTwf, detail: f.toolWearMin >= TWF_WEAR_MIN ? `Tool at ${Math.round(f.toolWearMin)} min of wear, past its 200 min end of life` : `Tool reaches end of life in about ${fmtMin(firstTwf)} (${Math.round(f.toolWearMin)} of 200 min)` },
   ];
+  const soonest = options.filter((o) => o.min !== null).sort((a, b) => (a.min ?? 0) - (b.min ?? 0))[0];
+  const worst = [...options].sort((a, b) => b.risk - a.risk)[0];
+  const risk = Math.min(1, Math.max(probability, worst.risk));
+  const lead = probability >= worst.risk && probability >= 0.3 ? null : soonest ?? worst;
+  return {
+    turbineId: id,
+    probability,
+    mode: lead?.mode ?? null,
+    minutesToFailure: soonest?.min ?? null,
+    risk: Math.round(risk * 100) / 100,
+    detail: lead ? lead.detail : `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`,
+    by: "Decision tree",
+  };
+}
+
+function fromRemote(r: RemotePrediction): Prediction {
+  const minutes = r.minutes_to_failure ?? null;
+  const by = r.model || "ML laptop";
+  const when = minutes === null ? "" : ` in about ${fmtMin(minutes)}`;
+  return {
+    turbineId: r.unit,
+    probability: r.probability,
+    mode: r.mode ?? null,
+    minutesToFailure: minutes,
+    risk: Math.round(r.probability * 100) / 100,
+    detail: r.detail || (r.mode ? `${by} forecasts ${FAILURE_NAME[r.mode].toLowerCase()}${when}` : `${by} gives ${Math.round(r.probability * 100)}% failure probability${when}`),
+    by,
+  };
+}
+
+function fmtMin(min: number | null) {
+  if (min === null) return "more than 20 min";
+  return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${min.toFixed(1)} min`;
+}
+
+function applyBoard(prev: Board, inputs: StepInputs): Board {
+  const now = inputs.nowMs ?? 0;
+  const r = inputs.sensor?.readings;
+  if (r && inputs.sensorAtMs !== undefined) {
+    const base = prev.features;
+    const ok = r.air_temp_k !== undefined && r.process_temp_k !== undefined && r.rpm !== undefined && r.torque_nm !== undefined && r.tool_wear_min !== undefined;
+    const features: Features | null = ok
+      ? { type: r.type ?? base?.type ?? "L", airTempK: r.air_temp_k!, processTempK: r.process_temp_k!, rpm: r.rpm!, torqueNm: r.torque_nm!, toolWearMin: r.tool_wear_min! }
+      : base;
+    return { features, lastSeenMs: inputs.sensorAtMs, source: features && now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim" };
+  }
+  return { ...prev, source: prev.features && prev.lastSeenMs !== null && now - prev.lastSeenMs < SENSOR_STALE_MS ? "live" : "sim" };
 }
 
 export function createPlant(seed = 7): PlantState {
   const turbines = Array.from({ length: TURBINE_COUNT }, (_, i) => makeTurbine(i));
-  const tempHistory: Record<string, number[]> = {};
-  for (const tb of turbines) tempHistory[tb.id] = [];
   return {
     t: 0,
     seed,
@@ -169,61 +213,14 @@ export function createPlant(seed = 7): PlantState {
     reserveMw: 0,
     turbines,
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
-    ambient: { pressureHpa: 1009.2, temperatureC: 31, airQualityRaw: 140, lightRaw: 2800, source: "sim", lastSeenMs: null },
-    shipments: initialShipments(),
-    deliveries: [],
+    board: { source: "sim", lastSeenMs: null, features: null },
+    engineers: initialEngineers(),
+    requests: [],
     predictions: [],
-    events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the site sensor board when it is connected` }],
+    events: [{ id: 0, t: 0, severity: "info", asset: LIVE_SENSOR_UNIT, text: `${LIVE_SENSOR_UNIT} reads the sensor board when it is connected` }],
     history: [],
-    tempHistory,
-    excessHistory: {},
-    simWear: {},
-    expectedExhaustC: Object.fromEntries(turbines.map((tb) => [tb.id, tb.exhaustTempC])),
+    riskHistory: Object.fromEntries(turbines.map((tb) => [tb.id, []])),
   };
-}
-
-// Exhaust temperature a healthy unit settles at for a given load.
-export function healthyExhaustC(load: number) {
-  return 560 + 45 * load;
-}
-
-// Watches how far a unit runs above a healthy unit at the same load ("excess"). Load swings move both
-// together, so only real degradation makes the excess climb. Stand-in until the ML model is trained on real data.
-export function predictOverheat(id: string, temps: number[], excess: number[]): Prediction {
-  const none: Prediction = { turbineId: id, issue: "overheat", minutesToLimit: null, risk: 0 };
-  if (excess.length < 60 || temps.length === 0) return none;
-  const recent = excess.slice(-60);
-  const n = recent.length;
-  let sx = 0, sy = 0, sxy = 0, sxx = 0;
-  for (let i = 0; i < n; i++) { sx += i; sy += recent[i]; sxy += i * recent[i]; sxx += i * i; }
-  const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-  const last = temps[temps.length - 1];
-  const headroom = TRIP_TEMP_C - last;
-  // Require a real rise, not a tilt in the noise, and only surface what an operator can act on soon.
-  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-  const rise = mean(recent.slice(-15)) - mean(recent.slice(0, 15));
-  const runningHot = recent[n - 1] > 4;
-  const minutes = runningHot && slope > 0.03 && rise > 2.5 && headroom > 0 ? headroom / slope / 60 : null;
-  const minutesToLimit = minutes !== null && minutes <= 20 ? minutes : null;
-  const proximity = Math.min(1, Math.max(0, (last - 610) / (TRIP_TEMP_C - 610)));
-  const urgency = minutesToLimit === null ? 0 : Math.min(1, 10 / Math.max(minutesToLimit, 0.5));
-  return { turbineId: id, issue: "overheat", minutesToLimit, risk: Math.round(100 * Math.max(proximity * 0.6, urgency)) / 100 };
-}
-
-function applySensor(prev: Ambient, inputs: StepInputs): Ambient {
-  const now = inputs.nowMs ?? 0;
-  const r = inputs.sensor?.readings;
-  if (r && inputs.sensorAtMs !== undefined) {
-    return {
-      pressureHpa: r.pressure_hpa ?? prev.pressureHpa,
-      temperatureC: r.temperature_c ?? prev.temperatureC,
-      airQualityRaw: r.air_quality_raw ?? prev.airQualityRaw,
-      lightRaw: r.light_raw ?? prev.lightRaw,
-      source: now - inputs.sensorAtMs < SENSOR_STALE_MS ? "live" : "sim",
-      lastSeenMs: inputs.sensorAtMs,
-    };
-  }
-  return { ...prev, source: prev.lastSeenMs !== null && now - prev.lastSeenMs < SENSOR_STALE_MS ? "live" : "sim" };
 }
 
 export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
@@ -233,19 +230,11 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   let nextEventId = (prev.events[0]?.id ?? 0) + 1;
   const log = (severity: Severity, asset: string, text: string) => events.push({ id: nextEventId++, t, severity, asset, text });
 
-  let ambient = applySensor(prev.ambient, inputs);
-  if (ambient.source === "sim") {
-    ambient = {
-      ...ambient,
-      pressureHpa: ambient.pressureHpa + (1009.2 - ambient.pressureHpa) * 0.02 + (rnd() - 0.5) * 0.15,
-      airQualityRaw: Math.max(40, ambient.airQualityRaw + (rnd() - 0.5) * 6),
-    };
-  }
+  const board = applyBoard(prev.board, inputs);
   const demandMw = demandAt(t, rnd);
-
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
-  const simWear = { ...prev.simWear };
-  const expected = { ...prev.expectedExhaustC };
+  const advanceRow = t % ROW_SECONDS === 0;
+  const wearRate: Record<string, number> = {};
 
   for (const id of inputs.tripRequests ?? []) {
     const tb = turbines.find((x) => x.id === id);
@@ -258,68 +247,82 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     const tb = turbines.find((x) => x.id === id);
     if (tb && tb.status === "tripped") {
       tb.status = "running"; tb.tripCause = null;
-      simWear[tb.id] = 0;
       log("info", tb.id, `${tb.id} reset and restarting`);
     }
   }
 
-  turbines.forEach((tb, i) => {
-    const running = tb.status === "running" || tb.status === "watch";
-    if (tb.id === LIVE_SENSOR_UNIT && ambient.source === "live") {
-      tb.sensors = {
-        inletPressureHpa: ambient.pressureHpa,
-        inletTempC: ambient.temperatureC,
-        airQualityRaw: ambient.airQualityRaw,
-        flameRaw: ambient.lightRaw,
-        source: "live",
-      };
+  for (const tb of turbines) {
+    const i = unitIndex(tb);
+    const before = tb.features;
+    if (tb.id === LIVE_SENSOR_UNIT && board.source === "live" && board.features) {
+      tb.features = board.features;
+      tb.source = "live";
+      tb.row = null;
     } else {
-      tb.sensors = simSensors(tb, i, t, rnd, running);
+      if (tb.row === null) tb.row = startRow(i);
+      tb.source = "sim";
+      // A tripped unit holds its last reading until someone fixes or resets it.
+      if (advanceRow && tb.status !== "tripped") {
+        const [start, end] = WINDOWS[i];
+        tb.row += 1;
+        if (tb.row >= end) {
+          tb.row = start;
+          log("info", tb.id, `${tb.id} tool changed at end of life, wear back to ${Math.round(rowFeatures(start).toolWearMin)} min`);
+        }
+        const failure = rowFailure(tb.row);
+        tb.features = rowFeatures(tb.row);
+        if (failure) {
+          tb.status = "tripped"; tb.tripCause = FAILURE_NAME[failure]; tb.outputMw = 0;
+          log("trip", tb.id, `${tb.id} tripped: ${FAILURE_NAME[failure].toLowerCase()} (dataset row ${tb.row + 1})`);
+        }
+      }
     }
-    // Each unit's capacity follows its own inlet air: thinner, hotter air makes less power.
-    tb.capacityMw = tb.ratedMw * derateFactor(tb.sensors.inletPressureHpa, tb.sensors.inletTempC);
-  });
+    const grew = tb.features.toolWearMin - before.toolWearMin;
+    wearRate[tb.id] = grew > 0 && grew < 20 ? grew : WEAR_PER_ROW;
+    tb.shaftPowerKw = shaftPowerW(tb.features) / 1000;
+    tb.capacityMw = tb.ratedMw * derateFactor(tb.features.airTempK);
+  }
 
-  // The light sensor is GT-08's flame detector: cover it and the unit trips.
-  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT);
-  if (live && live.sensors.source === "live" && live.sensors.flameRaw < LIGHT_TRIP_THRESHOLD && (live.status === "running" || live.status === "watch")) {
-    live.status = "tripped"; live.tripCause = "Flame detector lost signal"; live.outputMw = 0;
-    log("trip", live.id, `${live.id} tripped: flame detector lost signal`);
+  // Live board: trip on the same rules the dataset uses to label failures.
+  const live = turbines.find((x) => x.id === LIVE_SENSOR_UNIT && x.source === "live");
+  if (live && (live.status === "running" || live.status === "watch")) {
+    const f = live.features;
+    const w = shaftPowerW(f);
+    const mode = f.toolWearMin * f.torqueNm > OSF_LIMIT[f.type] ? "OSF"
+      : f.processTempK - f.airTempK < HDF_GAP_K && f.rpm < HDF_RPM ? "HDF"
+      : w < PWF_MIN_W || w > PWF_MAX_W ? "PWF" : null;
+    if (mode) {
+      live.status = "tripped"; live.tripCause = FAILURE_NAME[mode]; live.outputMw = 0;
+      log("trip", live.id, `${live.id} tripped: ${FAILURE_NAME[mode].toLowerCase()} on live sensor readings`);
+    }
+  }
+
+  const predictions: Prediction[] = turbines
+    .filter((x) => x.status !== "tripped" && x.status !== "offline")
+    .map((x) => {
+      const remoteFresh = inputs.remote && inputs.remoteAtMs !== undefined && (inputs.nowMs ?? 0) - inputs.remoteAtMs < REMOTE_STALE_MS;
+      return remoteFresh && inputs.remote!.unit === x.id ? fromRemote(inputs.remote!) : forecast(x.id, x.features, wearRate[x.id]);
+    })
+    .sort((a, b) => b.risk - a.risk);
+
+  for (const tb of turbines) {
+    const p = predictions.find((x) => x.turbineId === tb.id);
+    if (tb.status === "running" && p && p.risk >= WATCH_RISK) {
+      tb.status = "watch";
+      log("watch", tb.id, `${tb.id} on watch: ${p.detail}`);
+    } else if (tb.status === "watch" && (!p || p.risk < WATCH_RISK - 0.1)) {
+      tb.status = "running";
+      log("info", tb.id, `${tb.id} back to normal`);
+    }
   }
 
   const available = turbines.filter((x) => x.status === "running" || x.status === "watch");
   const share = available.length ? demandMw / available.length : 0;
-
   for (const tb of turbines) {
     const running = tb.status === "running" || tb.status === "watch";
     const target = running ? Math.min(share, tb.capacityMw) : 0;
-    const delta = Math.max(-RAMP_MW_PER_S, Math.min(RAMP_MW_PER_S, target - tb.outputMw));
+    const delta = Math.max(-18, Math.min(18, target - tb.outputMw));
     tb.outputMw = running ? Math.max(0, tb.outputMw + delta) : 0;
-    const load = tb.outputMw / tb.ratedMw;
-
-    // GT-03 carries a slowly failing combustion liner, which is why its spare is on the truck.
-    if (tb.id === "GT-03" && running) simWear[tb.id] = (simWear[tb.id] ?? 0) + 0.11;
-    const healthy = running ? healthyExhaustC(load) : 120;
-    tb.exhaustTempC += (healthy + (simWear[tb.id] ?? 0) - tb.exhaustTempC) * 0.08 + (rnd() - 0.5) * 1.2;
-    // The healthy reference follows the same thermal lag, so bursts in load don't show up as excess.
-    expected[tb.id] = (expected[tb.id] ?? tb.exhaustTempC) + (healthy - (expected[tb.id] ?? tb.exhaustTempC)) * 0.08;
-    tb.vibrationMmS = running ? Math.max(0.5, 2.2 + load * 1.1 + (tb.exhaustTempC > WATCH_TEMP_C ? 1.6 : 0) + (rnd() - 0.5) * 0.3) : 0.1;
-    tb.rpm = running ? 3600 + (rnd() - 0.5) * 4 : Math.max(0, tb.rpm * 0.9);
-    tb.efficiencyPct = running ? 30 + 9.5 * Math.min(load, 1) - (tb.exhaustTempC > WATCH_TEMP_C ? 1.2 : 0) : 0;
-    // Fuel heat input (MW) / LHV of natural gas (~47 MJ/kg) = kg/s
-    tb.fuelFlowKgS = running && tb.efficiencyPct > 0 ? tb.outputMw / (tb.efficiencyPct / 100) / 47 : 0;
-    if (running) tb.runHours += 1 / 3600;
-
-    if (running && tb.exhaustTempC >= TRIP_TEMP_C) {
-      tb.status = "tripped"; tb.tripCause = "Exhaust over-temperature"; tb.outputMw = 0;
-      log("trip", tb.id, `${tb.id} tripped: exhaust ${tb.exhaustTempC.toFixed(0)} °C over limit`);
-    } else if (tb.status === "running" && tb.exhaustTempC >= WATCH_TEMP_C) {
-      tb.status = "watch";
-      log("watch", tb.id, `${tb.id} exhaust temperature above ${WATCH_TEMP_C} °C`);
-    } else if (tb.status === "watch" && tb.exhaustTempC < WATCH_TEMP_C - 5) {
-      tb.status = "running";
-      log("info", tb.id, `${tb.id} exhaust temperature back to normal`);
-    }
   }
 
   const outputMw = turbines.reduce((s, x) => s + x.outputMw, 0);
@@ -334,85 +337,131 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const gridMw = Math.max(0, gap - Math.max(0, batteryMw));
   if (gridMw > 1 && prev.gridMw <= 1) log("watch", "Grid", `Importing ${gridMw.toFixed(0)} MW from the grid`);
   if (batteryMw > 150 && prev.battery.powerMw <= 150) log("info", "Battery", `Battery covering ${batteryMw.toFixed(0)} MW`);
-
   const reserveMw = available.reduce((s, x) => s + x.capacityMw, 0) - outputMw + battery.maxPowerMw * (battery.socPct > 10 ? 1 : 0);
 
-  const shipments = prev.shipments.map((sh) => {
-    const s = { ...sh };
-    const total = routeLengthKm(s.route);
-    const before = s.remainingKm;
-    const phone = inputs.gpsKm?.find((g) => g.shipmentId === s.id);
-    if (inputs.gpsRelease?.includes(s.id)) s.source = "sim";
-    if (inputs.gps && inputs.gps.shipmentId === s.id) {
-      s.lat = inputs.gps.lat; s.lon = inputs.gps.lon; s.source = "live"; s.lastPingT = t;
-      s.remainingKm = haversineKm([s.lon, s.lat], SITE_LON_LAT);
-      s.progress = Math.max(0, Math.min(1, 1 - s.remainingKm / total));
-    } else if (phone && !s.arrived) {
-      s.source = "live"; s.lastPingT = t;
-      s.progress = Math.min(1, s.progress + phone.km / total);
-      [s.lon, s.lat] = pointAlong(s.route, s.progress);
-      s.remainingKm = total * (1 - s.progress);
-    } else if (s.source === "sim" && !s.arrived) {
-      s.progress = Math.min(1, s.progress + (s.speedKmh / 3600) * SHIPMENT_REPLAY_SPEED / total);
-      [s.lon, s.lat] = pointAlong(s.route, s.progress);
-      s.remainingKm = total * (1 - s.progress);
-    }
-    s.etaMin = (s.remainingKm / (s.speedKmh * SHIPMENT_REPLAY_SPEED)) * 60;
-    if (before > GEOFENCE_KM && s.remainingKm <= GEOFENCE_KM && !s.arrived) log("info", s.id, `${s.id} entered the site geofence`);
-    if (!s.arrived && s.remainingKm < 0.3) {
-      s.arrived = true;
-      log("info", s.id, `${s.id} arrived on site: ${s.cargo.toLowerCase()}`);
-    }
-    return s;
-  });
+  // Maintenance: raise requests from what the sensors show, dispatch engineers, walk, repair.
+  const engineers = prev.engineers.map((e) => ({ ...e }));
+  const requests = prev.requests.map((r) => ({ ...r }));
+  const active = (r: MaintenanceRequest) => r.status !== "resolved" && r.status !== "cancelled";
+  const openFor = (asset: string) => requests.find((r) => r.asset === asset && active(r));
+  const recentlyFixed = (asset: string) =>
+    requests.some((r) => r.asset === asset && r.status === "resolved" && r.resolvedT !== null && t - r.resolvedT < FIX_COOLDOWN_S);
+  const create = (asset: string, reason: string, priority: Priority, origin: "auto" | "manual") => {
+    const r: MaintenanceRequest = {
+      id: `MR-${101 + requests.length}`, asset, reason, priority, origin, status: "open", createdT: t,
+      engineerId: null, dispatchedT: null, path: [], progress: 0, etaMin: 0, repairLeftS: REPAIR_S, resolvedT: null,
+    };
+    requests.push(r);
+    log(priority === "P1" ? "trip" : priority === "P2" ? "watch" : "info", asset, `${r.id} ${priority} ${asset}: ${reason}`);
+    return r;
+  };
+  const engineerOf = (r: MaintenanceRequest) => engineers.find((e) => e.id === r.engineerId);
 
-  const deliveries: Delivery[] = prev.deliveries.map((d) => ({ ...d }));
-  shipments.forEach((sh, i) => {
-    if (!sh.arrived || deliveries.some((d) => d.shipmentId === sh.id)) return;
-    const target = deliveryTarget(sh.forAsset);
-    deliveries.push({
-      shipmentId: sh.id, cargo: sh.cargo, crew: CREWS[i % CREWS.length], workers: i === 1 ? 2 : 3,
-      toAsset: sh.forAsset, toLabel: target.label, path: target.path,
-      status: "unloading", unloadLeftS: UNLOAD_S, progress: 0, pos: target.path[0], etaMin: 0, deliveredT: null,
-    });
-    log("info", sh.id, `${CREWS[i % CREWS.length]} unloading ${sh.id} at the dock`);
-  });
-  const stepM = WALK_M_PER_S * SITE_REPLAY_SPEED;
-  for (const d of deliveries) {
-    const len = pathLength(d.path);
-    if (d.status === "unloading") {
-      d.unloadLeftS = Math.max(0, d.unloadLeftS - 1);
-      if (d.unloadLeftS === 0) {
-        d.status = "carrying";
-        log("info", d.shipmentId, `${d.crew} carrying ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
-      }
-    } else if (d.status === "carrying") {
-      d.progress = Math.min(1, d.progress + stepM / len);
-      d.pos = pointOnPath(d.path, d.progress);
-      if (d.progress >= 1) {
-        d.status = "delivered"; d.deliveredT = t;
-        log("info", d.shipmentId, `${d.crew} delivered ${d.cargo.toLowerCase()} to the ${d.toLabel}`);
-      }
-    }
-    d.etaMin = d.status === "delivered" ? 0 : (d.unloadLeftS + ((1 - d.progress) * len) / stepM) / 60;
+  for (const m of inputs.newRequests ?? []) {
+    if (openFor(m.asset)) continue;
+    create(m.asset, m.reason.trim() || "Inspection requested by the control room", "P2", "manual");
   }
 
-  const tempHistory: Record<string, number[]> = {};
-  const excessHistory: Record<string, number[]> = {};
   for (const tb of turbines) {
-    const h = prev.tempHistory[tb.id] ?? [];
-    tempHistory[tb.id] = [...h.slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC];
-    const running = tb.status === "running" || tb.status === "watch";
-    // A stopped unit has no meaningful excess; restart its history so cool-down doesn't read as a trend.
-    excessHistory[tb.id] = running
-      ? [...(prev.excessHistory[tb.id] ?? []).slice(-(TEMP_HISTORY_LEN - 1)), tb.exhaustTempC - expected[tb.id]]
-      : [];
+    let priority: Priority | null = null;
+    let reason = "";
+    const pred = predictions.find((p) => p.turbineId === tb.id);
+    if (tb.status === "tripped") { priority = "P1"; reason = `Tripped: ${(tb.tripCause ?? "unknown cause").toLowerCase()}`; }
+    else if (tb.status === "watch" && pred) { priority = "P2"; reason = pred.detail; }
+    else if (pred && pred.minutesToFailure !== null && pred.minutesToFailure <= REQUEST_LEAD_MIN && !recentlyFixed(tb.id)) { priority = "P3"; reason = pred.detail; }
+    if (!priority) continue;
+    const existing = openFor(tb.id);
+    if (!existing) create(tb.id, reason, priority, "auto");
+    else if (PRIORITY_RANK[priority] < PRIORITY_RANK[existing.priority]) {
+      existing.priority = priority; existing.reason = reason;
+      log(priority === "P1" ? "trip" : "watch", tb.id, `${existing.id} raised to ${priority}: ${reason}`);
+    }
   }
-  const predictions = turbines
-    .filter((x) => x.status === "running" || x.status === "watch")
-    .map((x) => predictOverheat(x.id, tempHistory[x.id], excessHistory[x.id]))
-    .sort((a, b) => b.risk - a.risk);
 
+  for (const id of inputs.cancel ?? []) {
+    const r = requests.find((x) => x.id === id && active(x));
+    if (!r) continue;
+    const e = engineerOf(r);
+    if (e) { e.status = "available"; e.requestId = null; }
+    r.status = "cancelled";
+    log("info", r.asset, `${r.id} cancelled by the control room`);
+  }
+
+  // Most urgent first; the phone engineer gets first pick so the person carrying the app is in the loop.
+  const queue = requests.filter((r) => r.status === "open").sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdT - b.createdT);
+  for (const r of queue) {
+    const free = engineers.filter((e) => e.status === "available").sort((a, b) => (a.kind === "phone" ? -1 : 0) - (b.kind === "phone" ? -1 : 0));
+    const e = free[0];
+    if (!e) break;
+    r.status = "dispatched"; r.engineerId = e.id; r.dispatchedT = t; r.path = routeFrom(e.pos, r.asset); r.progress = 0;
+    e.status = "dispatched"; e.requestId = r.id;
+    log("info", r.asset, `${r.id} dispatched to ${e.name}`);
+  }
+
+  for (const a of inputs.accept ?? []) {
+    const r = requests.find((x) => x.id === a.requestId);
+    const e = engineers.find((x) => x.id === a.engineerId);
+    if (!r || !e || r.status !== "dispatched" || r.engineerId !== e.id) continue;
+    r.status = "en-route"; e.status = "walking";
+    log("info", r.asset, `${e.name} accepted ${r.id} and is heading to ${assetLabel(r.asset)}`);
+  }
+  for (const a of inputs.autoWalk ?? []) {
+    const e = engineers.find((x) => x.id === a.engineerId);
+    if (e) e.autoWalk = a.on;
+  }
+  for (const id of inputs.startRepair ?? []) {
+    const r = requests.find((x) => x.id === id);
+    const e = r && engineerOf(r);
+    if (!r || !e || r.status !== "on-site") continue;
+    r.status = "repairing"; e.status = "repairing";
+    log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`);
+  }
+
+  const paceM = WALK_M_PER_S * SITE_REPLAY_SPEED;
+  for (const r of requests) {
+    const e = engineerOf(r);
+    if (!e || !active(r)) continue;
+    // Simulated crew accept, walk and start work on their own.
+    if (e.kind === "sim" && r.status === "dispatched" && r.dispatchedT !== null && t - r.dispatchedT >= SIM_ACCEPT_S) {
+      r.status = "en-route"; e.status = "walking";
+      log("info", r.asset, `${e.name} accepted ${r.id} and is heading to ${assetLabel(r.asset)}`);
+    }
+    const len = Math.max(1, pathLength(r.path));
+    if (r.status === "en-route") {
+      const phoneMeters = (inputs.walkM ?? []).filter((w) => w.engineerId === e.id).reduce((s, w) => s + w.meters, 0);
+      const meters = e.kind === "sim" || e.autoWalk ? paceM : phoneMeters;
+      if (meters > 0) e.lastStepT = t;
+      r.progress = Math.min(1, r.progress + meters / len);
+      e.pos = pointOnPath(r.path, r.progress);
+      if (r.progress >= 1) {
+        r.status = "on-site"; e.status = "on-site";
+        log("info", r.asset, `${e.name} arrived at ${assetLabel(r.asset)}`);
+      }
+    }
+    if (e.kind === "sim" && r.status === "on-site") { r.status = "repairing"; e.status = "repairing"; log("info", r.asset, `${e.name} started work on ${assetLabel(r.asset)}`); }
+    if (r.status === "repairing") {
+      r.repairLeftS = Math.max(0, r.repairLeftS - 1);
+      if (r.repairLeftS === 0) {
+        r.status = "resolved"; r.resolvedT = t;
+        e.status = "available"; e.requestId = null;
+        const tb = turbines.find((x) => x.id === r.asset);
+        if (tb) {
+          // The repair fits a new tool, so replay continues from the start of this unit's tool life.
+          fitNewTool(tb);
+          tb.status = "running"; tb.tripCause = null;
+        }
+        log("info", r.asset, `${r.id} resolved: ${e.name} fixed ${assetLabel(r.asset)}`);
+      }
+    }
+    const walkLeft = r.status === "dispatched" || r.status === "en-route" ? ((1 - r.progress) * len) / paceM : 0;
+    r.etaMin = (walkLeft + (r.status === "resolved" ? 0 : r.repairLeftS)) / 60;
+  }
+
+  const riskHistory: Record<string, number[]> = {};
+  for (const tb of turbines) {
+    const p = predictions.find((x) => x.turbineId === tb.id);
+    riskHistory[tb.id] = [...(prev.riskHistory[tb.id] ?? []).slice(-(RISK_HISTORY_LEN - 1)), tb.status === "tripped" ? 1 : p?.risk ?? 0];
+  }
   const point: HistoryPoint = { t, demandMw, outputMw, batteryMw, gridMw };
 
   return {
@@ -424,30 +473,12 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     reserveMw,
     turbines,
     battery,
-    ambient,
-    shipments,
-    deliveries,
+    board,
+    engineers,
+    requests,
     predictions,
     events: [...events.reverse(), ...prev.events].slice(0, EVENT_LEN),
     history: [...prev.history.slice(-(HISTORY_LEN - 1)), point],
-    tempHistory,
-    excessHistory,
-    simWear,
-    expectedExhaustC: expected,
+    riskHistory,
   };
-}
-
-export function splitRoute(route: [number, number][], progress: number): [[number, number][], [number, number][]] {
-  const here = pointAlong(route, progress);
-  const total = routeLengthKm(route);
-  const driven: [number, number][] = [route[0]];
-  let km = 0;
-  let i = 1;
-  for (; i < route.length; i++) {
-    km += haversineKm(route[i - 1], route[i]);
-    if (km / total > progress) break;
-    driven.push(route[i]);
-  }
-  driven.push(here);
-  return [driven, [here, ...route.slice(i)]];
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createPlant, derateFactor, predictOverheat, splitRoute, step, WATCH_TEMP_C } from "./engine";
+import { createPlant, forecast, PHONE_ENGINEER, REPAIR_S, ROW_SECONDS, step } from "./engine";
+import { MODEL_METRICS, ROWS, WINDOWS, failureProbability, rowFailure, rowFeatures } from "./model";
 import type { PlantState, StepInputs } from "../types";
 
 function run(state: PlantState, seconds: number, inputs: StepInputs = {}) {
@@ -8,126 +9,167 @@ function run(state: PlantState, seconds: number, inputs: StepInputs = {}) {
   return s;
 }
 
-describe("plant engine", () => {
-  it("is deterministic for the same seed", () => {
-    expect(run(createPlant(3), 120).outputMw).toBe(run(createPlant(3), 120).outputMw);
+describe("dataset replay", () => {
+  it("loads all 10,000 rows of the AI4I dataset", () => {
+    expect(ROWS.length).toBe(10000);
+    expect(WINDOWS.length).toBe(8);
   });
 
-  it("battery covers the gap when a turbine trips", () => {
-    const steady = run(createPlant(), 60);
-    const tripped = step(steady, { tripRequests: ["GT-02"] });
-    expect(tripped.turbines[1].status).toBe("tripped");
-    expect(tripped.turbines[1].outputMw).toBe(0);
-    expect(tripped.battery.powerMw).toBeGreaterThan(100);
-    expect(tripped.events.some((e) => e.severity === "trip" && e.asset === "GT-02")).toBe(true);
+  it("each unit shows the exact features of the dataset row it is on", () => {
+    const s = run(createPlant(), ROW_SECONDS * 3);
+    for (const tb of s.turbines) expect(tb.features).toEqual(rowFeatures(tb.row!));
   });
 
-  it("trips GT-08 when its live flame sensor goes dark", () => {
-    const s = step(createPlant(), {
-      sensor: { device: "d", seq: 1, uptime_ms: 1, readings: { light_raw: 50 } },
-      sensorAtMs: 1000,
-      nowMs: 1500,
-    });
-    expect(s.ambient.source).toBe("live");
-    expect(s.turbines[7].sensors.source).toBe("live");
-    expect(s.turbines[7].status).toBe("tripped");
-    expect(s.turbines[0].status).not.toBe("tripped");
+  it("GT-03's tool life ends in the overstrain failure the dataset records", () => {
+    const [, end] = WINDOWS[2];
+    expect(rowFailure(end - 1)).toBe("OSF");
   });
 
-  it("ignores a dark light sensor when the reading is stale", () => {
-    const s = step(createPlant(), {
-      sensor: { device: "d", seq: 1, uptime_ms: 1, readings: { light_raw: 50 } },
-      sensorAtMs: 1000,
-      nowMs: 20000,
-    });
-    expect(s.ambient.source).toBe("sim");
-    expect(s.turbines[7].sensors.source).toBe("sim");
-    expect(s.turbines[7].status).not.toBe("tripped");
-  });
-
-  it("GT-03 drifts into watch and is flagged before it trips", () => {
-    let s = createPlant();
-    let flaggedEarly = false;
-    for (let i = 0; i < 900 && s.turbines[2].status === "running"; i++) {
-      s = step(s);
-      const p = s.predictions.find((x) => x.turbineId === "GT-03");
-      if (p && p.minutesToLimit !== null && s.turbines[2].exhaustTempC < WATCH_TEMP_C) flaggedEarly = true;
+  it("the other units replay tool lives with no recorded failure", () => {
+    for (const [i, [start, end]] of WINDOWS.entries()) {
+      if (i === 2) continue;
+      for (let r = start; r < end; r++) expect(rowFailure(r)).toBeNull();
     }
-    expect(s.turbines[2].status).toBe("watch");
-    expect(flaggedEarly).toBe(true);
   });
 
-  it("lower pressure derates capacity", () => {
-    expect(derateFactor(980, 31)).toBeLessThan(derateFactor(1013, 31));
-  });
-
-  it("healthy turbines are not flagged once start-up settles", () => {
-    const s = run(createPlant(), 120);
-    const healthy = s.predictions.filter((p) => p.turbineId !== "GT-03" && p.minutesToLimit !== null);
-    expect(healthy).toEqual([]);
-  });
-
-  it("never flags a healthy turbine across ten minutes of load bursts", () => {
+  it("a unit trips exactly when it reaches a failure row and nobody intervenes", () => {
     let s = createPlant();
+    for (let i = 0; i < 900 && s.turbines[2].status !== "tripped"; i++) {
+      s = step(s, { cancel: s.requests.filter((r) => r.asset === "GT-03" && r.status !== "cancelled").map((r) => r.id) });
+    }
+    expect(s.turbines[2].status).toBe("tripped");
+    expect(s.turbines[2].tripCause).toBe("Overstrain failure");
+  });
+});
+
+describe("model", () => {
+  it("scores well on rows it never saw in training", () => {
+    expect(MODEL_METRICS.precision).toBeGreaterThan(0.9);
+    expect(MODEL_METRICS.recall).toBeGreaterThan(0.7);
+  });
+
+  it("flags a heat dissipation failure row and clears a healthy one", () => {
+    const hdf = ROWS.findIndex((r) => r[8] === 1);
+    expect(failureProbability(rowFeatures(hdf))).toBeGreaterThan(0.5);
+    expect(failureProbability(rowFeatures(0))).toBeLessThan(0.2);
+  });
+
+  it("forecasts overstrain sooner as tool wear rises", () => {
+    const f = rowFeatures(0);
+    const early = forecast("GT-01", { ...f, toolWearMin: 60 });
+    const late = forecast("GT-01", { ...f, toolWearMin: 190 });
+    expect(late.minutesToFailure!).toBeLessThan(early.minutesToFailure ?? Infinity);
+  });
+});
+
+describe("maintenance", () => {
+  it("raises a request for GT-03 before its overstrain failure, and the repair prevents it", () => {
+    let s = createPlant();
+    let raisedAt = -1;
     for (let i = 0; i < 600; i++) {
-      s = step(s);
-      const falseAlarm = s.predictions.find((p) => p.turbineId !== "GT-03" && p.minutesToLimit !== null);
-      expect(falseAlarm).toBeUndefined();
+      s = step(s, { autoWalk: [{ engineerId: PHONE_ENGINEER, on: true }] });
+      const r = s.requests.find((x) => x.asset === "GT-03");
+      if (r && raisedAt < 0) raisedAt = s.t;
+      if (r && r.status === "dispatched" && r.engineerId === PHONE_ENGINEER) s = step(s, { accept: [{ requestId: r.id, engineerId: PHONE_ENGINEER }] });
+      if (r && r.status === "on-site" && r.engineerId === PHONE_ENGINEER) s = step(s, { startRepair: [r.id] });
     }
+    expect(raisedAt).toBeGreaterThan(0);
+    expect(s.events.some((e) => e.asset === "GT-03" && e.severity === "trip")).toBe(false);
+    expect(s.requests.some((x) => x.asset === "GT-03" && x.status === "resolved")).toBe(true);
   });
 
-  it("does not forecast during the start-up settle", () => {
-    expect(predictOverheat("GT-01", [600], Array.from({ length: 40 }, (_, i) => i * 0.5)).minutesToLimit).toBeNull();
+  it("a trip raises a P1 and dispatches the phone engineer first", () => {
+    let s = run(createPlant(), 5);
+    s = step(s, { tripRequests: ["GT-05"] });
+    s = step(s);
+    const r = s.requests.find((x) => x.asset === "GT-05")!;
+    expect(r.priority).toBe("P1");
+    expect(r.engineerId).toBe(PHONE_ENGINEER);
   });
 
-    it("prediction has no estimate for a flat trend", () => {
-    expect(predictOverheat("GT-01", Array(120).fill(590), Array(120).fill(0.4)).minutesToLimit).toBeNull();
+  it("the phone engineer walks only on GPS steps, then the repair fits a new tool", () => {
+    let s = run(createPlant(), 5);
+    s = step(s, { tripRequests: ["GT-05"] });
+    s = step(s);
+    const id = s.requests.find((x) => x.asset === "GT-05")!.id;
+    s = step(s, { accept: [{ requestId: id, engineerId: PHONE_ENGINEER }] });
+    const before = s.requests.find((x) => x.id === id)!.progress;
+    s = step(s);
+    expect(s.requests.find((x) => x.id === id)!.progress).toBe(before);
+    for (let i = 0; i < 200 && s.requests.find((x) => x.id === id)!.status === "en-route"; i++) {
+      s = step(s, { walkM: [{ engineerId: PHONE_ENGINEER, meters: 8 }] });
+    }
+    s = step(s, { startRepair: [id] });
+    for (let i = 0; i < REPAIR_S; i++) s = step(s);
+    expect(s.requests.find((x) => x.id === id)!.status).toBe("resolved");
+    expect(s.turbines[4].status).toBe("running");
+    expect(s.turbines[4].row).toBe(WINDOWS[4][0]);
+  });
+
+  it("a manual request goes to an engineer and simulated crew finish it", () => {
+    let s = createPlant();
+    s = step(s, { tripRequests: ["GT-02"] });
+    s = step(s);
+    s = step(s, { newRequests: [{ asset: "switchyard", reason: "Breaker 4 alarm" }] });
+    const r = s.requests.find((x) => x.asset === "switchyard")!;
+    expect(r.origin).toBe("manual");
+    for (let i = 0; i < 300 && s.requests.find((x) => x.id === r.id)!.status !== "resolved"; i++) s = step(s);
+    expect(s.requests.find((x) => x.id === r.id)!.status).toBe("resolved");
+  });
+
+  it("does not open a second request for an asset that already has one", () => {
+    let s = createPlant();
+    s = step(s, { newRequests: [{ asset: "GT-01", reason: "a" }] });
+    s = step(s, { newRequests: [{ asset: "GT-01", reason: "b" }] });
+    expect(s.requests.filter((x) => x.asset === "GT-01").length).toBe(1);
   });
 });
 
-describe("shipments", () => {
-  it("phone GPS takes over a trailer and moves it along its route", () => {
-    const s0 = createPlant();
-    const before = s0.shipments[0].remainingKm;
-    const s1 = step(s0, { gpsKm: [{ shipmentId: "TRL-204", km: 5 }] });
-    expect(s1.shipments[0].source).toBe("live");
-    expect(before - s1.shipments[0].remainingKm).toBeCloseTo(5, 1);
-    const s2 = step(s1);
-    expect(s2.shipments[0].remainingKm).toBeCloseTo(s1.shipments[0].remainingKm, 5);
-    const s3 = step(s2, { gpsRelease: ["TRL-204"] });
-    expect(s3.shipments[0].source).toBe("sim");
+describe("GT-08 live sensor board", () => {
+  const reading = (r: Record<string, number | string>) => ({ device: "board", seq: 1, uptime_ms: 1, readings: r });
+
+  it("takes the six features live and stops replaying the dataset", () => {
+    const s = step(createPlant(), {
+      sensor: reading({ type: "M", air_temp_k: 299, process_temp_k: 309.5, rpm: 1500, torque_nm: 42, tool_wear_min: 30 }),
+      sensorAtMs: 1000, nowMs: 1500,
+    });
+    const gt8 = s.turbines[7];
+    expect(gt8.source).toBe("live");
+    expect(gt8.row).toBeNull();
+    expect(gt8.features).toMatchObject({ type: "M", rpm: 1500, torqueNm: 42 });
   });
 
-  it("splits a route at the current position", () => {
-    const sh = createPlant().shipments[0];
-    const [driven, rest] = splitRoute(sh.route, 0.5);
-    expect(driven[driven.length - 1]).toEqual(rest[0]);
-    expect(rest[rest.length - 1]).toEqual(sh.route[sh.route.length - 1]);
+  it("trips on live readings that break the dataset's overstrain rule", () => {
+    const s = step(createPlant(), {
+      sensor: reading({ type: "L", air_temp_k: 299, process_temp_k: 310, rpm: 1400, torque_nm: 60, tool_wear_min: 200 }),
+      sensorAtMs: 1000, nowMs: 1500,
+    });
+    expect(s.turbines[7].status).toBe("tripped");
+    expect(s.turbines[7].tripCause).toBe("Overstrain failure");
+  });
+
+  it("ignores stale readings", () => {
+    const s = step(createPlant(), {
+      sensor: reading({ type: "L", air_temp_k: 299, process_temp_k: 310, rpm: 1400, torque_nm: 60, tool_wear_min: 200 }),
+      sensorAtMs: 1000, nowMs: 20000,
+    });
+    expect(s.turbines[7].source).toBe("sim");
   });
 });
 
-describe("deliveries", () => {
-  it("a crew unloads an arrived truck and carries the parts to the asset", () => {
-    let s = createPlant();
-    s = step(s, { gpsKm: [{ shipmentId: "TRL-204", km: 1000 }] });
-    expect(s.shipments[0].arrived).toBe(true);
-    let d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
-    expect(d.status).toBe("unloading");
-    expect(d.toAsset).toBe("GT-03");
-    const firstEta = d.etaMin;
-    for (let i = 0; i < 25; i++) s = step(s);
-    d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!;
-    expect(d.status).toBe("carrying");
-    expect(d.etaMin).toBeLessThan(firstEta);
-    for (let i = 0; i < 400 && d.status !== "delivered"; i++) { s = step(s); d = s.deliveries.find((x) => x.shipmentId === "TRL-204")!; }
-    expect(d.status).toBe("delivered");
-    expect(d.pos).toEqual(d.path[d.path.length - 1]);
-    expect(s.events.some((e) => e.text.includes("delivered combustion liner set"))).toBe(true);
+describe("ML laptop forecast", () => {
+  const remote = { unit: "GT-08", probability: 0.8, mode: "HDF" as const, minutes_to_failure: 1.5, model: "LSTM v2" };
+
+  it("replaces the tree's forecast for its unit while fresh", () => {
+    const s = step(createPlant(), { remote, remoteAtMs: 1000, nowMs: 2000 });
+    const p = s.predictions.find((x) => x.turbineId === "GT-08")!;
+    expect(p).toMatchObject({ by: "LSTM v2", probability: 0.8, mode: "HDF", minutesToFailure: 1.5 });
+    expect(s.turbines[7].status).toBe("watch");
+    expect(s.predictions.find((x) => x.turbineId === "GT-01")!.by).toBe("Decision tree");
   });
 
-  it("each arrived shipment gets its own crew", () => {
-    let s = createPlant();
-    for (const id of ["TRL-204", "TNK-118", "TRL-311"]) s = step(s, { gpsKm: [{ shipmentId: id, km: 1000 }] });
-    expect(new Set(s.deliveries.map((d) => d.crew)).size).toBe(3);
+  it("falls back to the tree once the laptop stops posting", () => {
+    const s = step(createPlant(), { remote, remoteAtMs: 1000, nowMs: 30000 });
+    expect(s.predictions.find((x) => x.turbineId === "GT-08")!.by).toBe("Decision tree");
   });
 });

@@ -13,7 +13,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#C9CCC6",
+        "backgroundColor": "#ECEEF1",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -30,7 +30,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#C9CCC6",
+          "backgroundColor": "#ECEEF1",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
@@ -38,7 +38,13 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Power Guard 360 uses your location to drive a delivery truck on the shipments map."
+          "locationWhenInUsePermission": "Power Guard 360 uses your location to walk you to the equipment that needs repair on the site map."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#2f6fde"
         }
       ]
     ],

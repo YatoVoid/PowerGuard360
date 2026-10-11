@@ -3,19 +3,24 @@ import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 
-import { LIVE_SENSOR_UNIT, TRIP_TEMP_C, WATCH_TEMP_C } from '@engine/sim/engine';
-import type { Delivery, HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
+import { LIVE_SENSOR_UNIT, WATCH_RISK } from '@engine/sim/engine';
+import { FAILURE_NAME, MODEL_METRICS } from '@engine/sim/model';
+import type { Features, HistoryPoint, PlantEvent, Source, Turbine } from '@engine/types';
 import { useStore } from '@/state/store';
 import { C, F, S, clockOf, fmt } from '@/ui/theme';
 
 export function TopBar({ title }: { title: string }) {
   const t = useStore((s) => s.plant.t);
   const alarms = useStore((s) => s.plant.turbines.filter((x) => x.status === 'watch' || x.status === 'tripped').length);
+  const live = useStore((s) => s.link === 'live');
   return (
     <View style={st.top}>
       <View style={{ flex: 1 }}>
-        <Text style={st.brand}>Power Guard 360</Text>
-        <Text style={st.screen}>{title}</Text>
+        <Text style={st.brand}>{title}</Text>
+        <View style={st.linkRow} accessibilityLabel={live ? 'Connected to the plant server' : 'Not connected to the plant server'}>
+          <View style={[st.linkDot, { backgroundColor: live ? C.live : C.ink3 }]} />
+          <Text style={st.screen}>{live ? 'Live from the plant' : 'Offline copy'}</Text>
+        </View>
       </View>
       {alarms > 0 && (
         <View style={st.alarmCount}>
@@ -59,16 +64,23 @@ export function KV({ label, value, watch }: { label: string; value: string; watc
 
 export const tap = () => { Haptics.selectionAsync().catch(() => {}); };
 
-export function Btn({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) {
+export function Btn({ label, onPress, danger, primary }: { label: string; onPress: () => void; danger?: boolean; primary?: boolean }) {
   return (
     <Pressable
       onPress={() => { tap(); onPress(); }}
       android_ripple={{ color: danger ? C.tripBg : C.surface2 }}
       hitSlop={6}
       accessibilityRole="button"
-      style={({ pressed }) => [st.btn, danger && { borderColor: C.trip }, pressed && { backgroundColor: danger ? C.trip : C.surface2 }]}
+      style={({ pressed }) => [
+        st.btn,
+        danger && { borderColor: C.trip },
+        primary && { backgroundColor: C.flow, borderColor: C.flow, minHeight: 52 },
+        pressed && { backgroundColor: danger ? C.trip : primary ? '#255fc4' : C.surface2 },
+      ]}
     >
-      {({ pressed }) => <Text style={[st.btnText, danger && { color: pressed ? '#fff' : C.trip }]}>{label}</Text>}
+      {({ pressed }) => (
+        <Text style={[st.btnText, danger && { color: pressed ? '#fff' : C.trip }, primary && { color: '#fff', textAlign: 'center' }]}>{label}</Text>
+      )}
     </Pressable>
   );
 }
@@ -171,10 +183,10 @@ export function TurbineTiles({ onPick }: { onPick?: () => void }) {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <Text style={[st.tileId, { color: c.ink }]}>{tb.id}</Text>
-              {tb.sensors.source === 'live' && <View style={st.liveDot} accessibilityLabel="live sensors" />}
+              {tb.source === 'live' && <View style={st.liveDot} accessibilityLabel="live sensors" />}
             </View>
             <Text style={[st.tileMw, { color: c.ink }]}>{on ? fmt(tb.outputMw) : '0'}<Text style={[st.statUnit, { color: c.ink }]}> MW</Text></Text>
-            <Text style={[st.tileMeta, { color: c.ink }]}>{tb.status === 'running' ? `${fmt(tb.exhaustTempC)} °C` : tb.status}</Text>
+            <Text style={[st.tileMeta, { color: c.ink }]}>{on ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status[0].toUpperCase() + tb.status.slice(1)}</Text>
             <View style={st.tileBar}><View style={{ height: 4, width: `${(tb.outputMw / tb.ratedMw) * 100}%`, backgroundColor: c.bar }} /></View>
           </Pressable>
         );
@@ -184,15 +196,29 @@ export function TurbineTiles({ onPick }: { onPick?: () => void }) {
 }
 
 function Spark({ values }: { values: number[] }) {
-  const w = 110, h = 26, lo = 540, hi = TRIP_TEMP_C + 5;
+  const w = 110, h = 26;
   if (values.length < 2) return <View style={{ width: w, height: h }} />;
   const x = (i: number) => (i / (values.length - 1)) * w;
-  const y = (v: number) => h - ((Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * h;
+  const y = (v: number) => h - Math.min(1, Math.max(0, v)) * h;
   return (
     <Svg width={w} height={h}>
-      <Line x1={0} x2={w} y1={y(WATCH_TEMP_C)} y2={y(WATCH_TEMP_C)} stroke={C.watch} strokeDasharray="3 3" />
-      <Polyline points={values.map((v, i) => `${x(i)},${y(v)}`).join(' ')} fill="none" stroke={C.ink} strokeWidth={1.5} />
+      <Line x1={0} x2={w} y1={y(WATCH_RISK)} y2={y(WATCH_RISK)} stroke={C.watch} strokeDasharray="3 3" />
+      <Polyline points={values.map((v, i) => `${x(i)},${y(v)}`).join(' ')} fill="none" stroke={C.flow} strokeWidth={1.5} />
     </Svg>
+  );
+}
+
+const K = 273.15;
+export function FeatureRows({ f }: { f: Features }) {
+  return (
+    <View>
+      <KV label="Type (quality grade)" value={f.type} />
+      <KV label="Air temperature" value={`${fmt(f.airTempK, 1)} K (${fmt(f.airTempK - K, 1)} °C)`} />
+      <KV label="Process temperature" value={`${fmt(f.processTempK, 1)} K (${fmt(f.processTempK - K, 1)} °C)`} />
+      <KV label="Rotational speed" value={`${fmt(f.rpm)} rpm`} />
+      <KV label="Torque" value={`${fmt(f.torqueNm, 1)} Nm`} />
+      <KV label="Tool wear" value={`${fmt(f.toolWearMin)} min`} />
+    </View>
   );
 }
 
@@ -215,27 +241,22 @@ export function TurbineDetail() {
         </View>
       </View>
       {tb.tripCause && <Text style={st.cause}>{tb.tripCause}</Text>}
-      <KV label="Output" value={`${fmt(tb.outputMw)} / ${fmt(tb.capacityMw)} MW`} />
-      <KV label="Exhaust temp" value={`${fmt(tb.exhaustTempC)} °C`} watch={tb.exhaustTempC >= WATCH_TEMP_C} />
-      <KV label="Vibration" value={`${fmt(tb.vibrationMmS, 1)} mm/s`} />
-      <KV label="Speed" value={`${fmt(tb.rpm)} rpm`} />
-      <KV label="Fuel flow" value={`${fmt(tb.fuelFlowKgS, 1)} kg/s`} />
-      <KV label="Efficiency" value={`${fmt(tb.efficiencyPct, 1)} %`} />
+      <KV label="Electrical output" value={`${fmt(tb.outputMw)} / ${fmt(tb.capacityMw)} MW`} />
+      <KV label="Shaft power (torque × speed)" value={`${fmt(tb.shaftPowerKw, 2)} kW`} />
       <View style={[st.panelHead, { marginTop: 14, marginBottom: 4 }]}>
-        <Text style={st.panelTitle}>Unit sensors</Text>
-        <SourceTag source={tb.sensors.source} />
+        <Text style={st.panelTitle}>Machine readings</Text>
+        <SourceTag source={tb.source} />
       </View>
-      <KV label="Inlet pressure" value={`${fmt(tb.sensors.inletPressureHpa, 1)} hPa`} />
-      <KV label="Inlet air temp" value={`${fmt(tb.sensors.inletTempC, 1)} °C`} />
-      <KV label="Air quality (raw)" value={fmt(tb.sensors.airQualityRaw)} />
-      <KV label="Flame detector" value={fmt(tb.sensors.flameRaw)} />
+      <FeatureRows f={tb.features} />
+      <Text style={[st.small, { marginTop: 6 }]}>
+        {tb.source === 'live' ? 'Measured live by the sensor board.' : `Dataset row ${tb.row === null ? '' : (tb.row + 1).toLocaleString('en-US')} of the AI4I 2020 data.`}
+      </Text>
       <View style={st.trendRow}>
-        <Text style={st.small}>Exhaust temp, last 3 min</Text>
-        <Spark values={plant.tempHistory[tb.id] ?? []} />
+        <Text style={st.small}>Failure risk, last 3 min</Text>
+        <Spark values={plant.riskHistory[tb.id] ?? []} />
       </View>
-      {pred && pred.minutesToLimit !== null && (
-        <Text style={st.forecast}>Reaches the {TRIP_TEMP_C} °C trip limit in about {fmt(pred.minutesToLimit, 1)} min at the current trend.</Text>
-      )}
+      {pred && pred.risk >= 0.2 && <Text style={st.forecast}>{pred.detail}</Text>}
+      {pred && <Text style={[st.small, { marginTop: 6 }]}>{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</Text>}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
         {(tb.status === 'running' || tb.status === 'watch') && (
           <Btn
@@ -256,56 +277,38 @@ export function TurbineDetail() {
 export function Predictions() {
   const preds = useStore((s) => s.plant.predictions);
   const select = useStore((s) => s.select);
-  const flagged = preds.filter((p) => p.minutesToLimit !== null || p.risk > 0.2);
+  const flagged = preds.filter((p) => p.risk >= 0.2 || (p.minutesToFailure !== null && p.minutesToFailure <= 5));
   return (
     <View style={{ gap: 6 }}>
-      {flagged.length === 0 && <Text style={st.small}>No turbine is trending toward a limit.</Text>}
+      {flagged.length === 0 && <Text style={st.small}>No unit is heading toward a failure in the next few minutes.</Text>}
       {flagged.map((p) => (
         <Pressable key={p.turbineId} onPress={() => { tap(); select(p.turbineId); }} android_ripple={{ color: C.surface }} style={st.pred} accessibilityRole="button">
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
             <Text style={st.predId}>{p.turbineId}</Text>
-            <Text style={st.body}>Overheat {p.minutesToLimit !== null ? `in ~${fmt(p.minutesToLimit, 1)} min` : 'risk rising'}</Text>
+            <Text style={[st.body, { flex: 1, textAlign: 'right' }]}>
+              {p.mode ? `${FAILURE_NAME[p.mode]}${p.minutesToFailure !== null ? ` in ~${fmt(p.minutesToFailure, 1)} min` : ''}` : `${Math.round(p.probability * 100)}% failure probability`}
+            </Text>
           </View>
           <View style={st.meter}><View style={{ height: 6, width: `${p.risk * 100}%`, backgroundColor: p.risk > 0.6 ? C.trip : p.risk > 0.3 ? C.watch : C.ink2 }} /></View>
         </Pressable>
       ))}
-      <Text style={[st.small, { marginTop: 4 }]}>Trend extrapolation on exhaust temperature. Replaced by the trained model once real turbine data is in.</Text>
+      <Text style={[st.small, { marginTop: 4 }]}>
+        Decision tree trained on {MODEL_METRICS.train_rows.toLocaleString('en-US')} rows of the AI4I 2020 dataset. On {MODEL_METRICS.test_rows.toLocaleString('en-US')} unseen rows it caught {Math.round(MODEL_METRICS.recall * 100)}% of failures at {Math.round(MODEL_METRICS.precision * 100)}% precision.
+      </Text>
     </View>
   );
 }
 
 export function Sensors() {
-  const a = useStore((s) => s.plant.ambient);
+  const board = useStore((s) => s.plant.board);
   return (
     <View>
-      <KV label="Barometric pressure" value={`${fmt(a.pressureHpa, 1)} hPa`} />
-      <KV label="Ambient temp" value={`${fmt(a.temperatureC, 1)} °C`} />
-      <KV label="Air quality (raw)" value={fmt(a.airQualityRaw)} />
-      <KV label="Flame detector (light)" value={fmt(a.lightRaw)} />
+      {board.features ? <FeatureRows f={board.features} /> : <Text style={st.small}>No readings received yet.</Text>}
       <Text style={[st.small, { marginTop: 8 }]}>
-        {a.source === 'live'
-          ? `Live readings feed ${LIVE_SENSOR_UNIT}. Covering the light sensor trips it.`
-          : `No sensor board connected. ${LIVE_SENSOR_UNIT} shows simulated readings like the other units.`}
+        {board.source === 'live'
+          ? `The board's six readings drive ${LIVE_SENSOR_UNIT} directly.`
+          : `Not connected. ${LIVE_SENSOR_UNIT} is replaying the dataset until the board posts readings.`}
       </Text>
-    </View>
-  );
-}
-
-export function DeliveryInfo({ d }: { d: Delivery }) {
-  const eta = d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${fmt(d.etaMin, 1)} min`;
-  return (
-    <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.rule }}>
-      <Text style={[st.panelTitle, { marginBottom: 6 }]}>On site</Text>
-      <Text style={st.body}>
-        {d.status === 'unloading' && `${d.crew} (${d.workers} people) unloading at the dock. Parts reach the ${d.toLabel} in ${eta}.`}
-        {d.status === 'carrying' && `${d.crew} (${d.workers} people) carrying the parts to the ${d.toLabel}. Arrives in ${eta}.`}
-        {d.status === 'delivered' && `${d.crew} delivered the parts to the ${d.toLabel}.`}
-      </Text>
-      {d.status !== 'delivered' && (
-        <View style={[st.meter, { marginTop: 8, height: 4 }]}>
-          <View style={{ height: 4, width: `${(d.status === 'unloading' ? 0 : d.progress) * 100}%`, backgroundColor: C.flow }} />
-        </View>
-      )}
     </View>
   );
 }
@@ -333,20 +336,22 @@ export function Alarms({ events, limit = 8, empty = 'No alarms.' }: { events: Pl
 
 export const st = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: S.gutter, paddingVertical: 10, backgroundColor: C.surface, borderBottomWidth: 1, borderBottomColor: C.rule },
-  brand: { fontFamily: F.numBold, fontSize: 20, color: C.ink },
+  brand: { fontFamily: F.numBold, fontSize: 22, color: C.ink },
   screen: { fontFamily: F.regular, fontSize: 13, color: C.ink2 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  linkDot: { width: 7, height: 7, borderRadius: 4 },
   clock: { fontFamily: F.num, fontSize: 16, color: C.ink, fontVariant: ['tabular-nums'] },
   alarmCount: { backgroundColor: C.trip, paddingHorizontal: 8, paddingVertical: 3, borderRadius: S.radiusS },
   alarmCountText: { fontFamily: F.semibold, fontSize: 12, color: '#fff' },
   panel: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.rule, borderRadius: S.radius, padding: 14 },
   panelHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  panelTitle: { fontFamily: F.semibold, fontSize: 15, color: C.ink2 },
+  panelTitle: { fontFamily: F.num, fontSize: 16, color: C.ink },
   src: { borderWidth: 1, borderColor: C.rule, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   srcText: { fontFamily: F.semibold, fontSize: 12, color: C.ink2 },
   kv: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: C.surface2, gap: 12 },
   kvLabel: { fontFamily: F.regular, fontSize: 15, color: C.ink2, flexShrink: 1 },
   kvValue: { fontFamily: F.num, fontSize: 16, color: C.ink, fontVariant: ['tabular-nums'], paddingHorizontal: 2 },
-  btn: { minHeight: 48, justifyContent: 'center', borderWidth: 1, borderColor: C.ink, borderRadius: S.radiusS, paddingHorizontal: 16, backgroundColor: C.surface, overflow: 'hidden' },
+  btn: { minHeight: 48, justifyContent: 'center', borderWidth: 1, borderColor: '#c8ced6', borderRadius: S.radiusS, paddingHorizontal: 16, backgroundColor: C.surface, overflow: 'hidden' },
   btnText: { fontFamily: F.semibold, fontSize: 15, color: C.ink },
   stats: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
   stat: { width: '50%', borderTopWidth: 1, borderTopColor: C.rule, paddingTop: 6, paddingRight: 8 },
@@ -361,7 +366,7 @@ export const st = StyleSheet.create({
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.flow },
   tileId: { fontFamily: F.bold, fontSize: 13 },
   tileMw: { fontFamily: F.num, fontSize: 22, fontVariant: ['tabular-nums'] },
-  tileMeta: { fontFamily: F.regular, fontSize: 12, opacity: 0.8, textTransform: 'capitalize' },
+  tileMeta: { fontFamily: F.regular, fontSize: 12, opacity: 0.8 },
   tileBar: { height: 4, backgroundColor: C.surface2, marginTop: 6, overflow: 'hidden' },
   hint: { fontFamily: F.regular, fontSize: 13, color: C.ink2, marginBottom: 8 },
   detailHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },

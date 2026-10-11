@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Line, OrbitControls, Sky } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { useStore } from "../store";
-import { DOCK_BAYS, UNIT_X } from "../sim/site";
+import { useStore, type CameraPreset } from "../store";
+import { UNIT_X } from "../sim/site";
+import { etaText } from "../ui/parts";
 import { LIVE_SENSOR_UNIT } from "../sim/engine";
 import type { Turbine } from "../types";
 
@@ -21,26 +23,33 @@ const STATUS_COLOR: Record<Turbine["status"], string> = {
   tripped: "#c8261e",
   offline: "#5d6360",
 };
-const STEEL = "#9aa19c";
-const CLAD = "#c9ccc6";
-const GRAVEL = "#b3ada0";
-const ASPHALT = "#4d4b47";
+const STEEL = "#b4bac1";
+const CLAD = "#eceef1";
+const GRAVEL = "#e4e7ea";
+const ASPHALT = "#a3a9b0";
 const FLOW = "#2f5d8a";
 const GAS = "#c9a227";
 const PAD = { x0: -190, x1: 190, z0: -118, z1: 96 };
-const ROAD: V3[] = [[270, 0.3, 102], [210, 0.3, 102], [180, 0.3, 90], [140, 0.3, 82]];
-const ROAD_KM = 3;
 const BUS_Z = -86;
 const SWITCHYARD = { x: 152, z: -45 };
 
 // Large assets need the camera further back, and the condenser reads best from the open south-west side.
+// Focus stops far enough out that the asset's label and its surroundings stay in view.
+const FOCUS_PULLBACK = 2.6;
 const CAMERA_OFFSET: Record<string, V3> = {
   acc: [-70, 70, 95],
   datacenter: [60, 70, 120],
   battery: [30, 40, 60],
   switchyard: [55, 60, 85],
   gas: [30, 35, 55],
-  dock: [50, 70, 110],
+  control: [40, 50, 80],
+};
+
+const PRESET_VIEWS: Record<CameraPreset, { target: V3; camera: V3 }> = {
+  overview: { target: [0, 0, -10], camera: [190, 160, 260] },
+  turbines: { target: [0, 10, -40], camera: [30, 95, 120] },
+  control: { target: [-120, 0, 60], camera: [-60, 80, 150] },
+  top: { target: [0, 0, -5], camera: [0.1, 470, 1] },
 };
 
 // Focus easing adapted from WareTwin (MIT, github.com/WayneChou-bot/WareTwin).
@@ -51,11 +60,39 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
   useEffect(() => {
     const p = assetPosition(selected);
     if (!p) return;
-    const isTruck = !!selected && (selected.startsWith("TRL-") || selected.startsWith("TNK-"));
-    const off = CAMERA_OFFSET[isTruck ? "dock" : selected ?? ""] ?? [40, 42, 64];
+    const off = CAMERA_OFFSET[selected ?? ""] ?? [40, 42, 64];
     goal.current = new THREE.Vector3(p[0], 6, p[2]);
-    camGoal.current = new THREE.Vector3(p[0] + off[0], off[1], p[2] + off[2]);
+    camGoal.current = new THREE.Vector3(p[0] + off[0] * FOCUS_PULLBACK, off[1] * FOCUS_PULLBACK, p[2] + off[2] * FOCUS_PULLBACK);
   }, [selected]);
+  // Any drag or scroll hands the camera back to the user, so the fly-in never fights a zoom.
+  const el = useThree((s) => s.events.connected as HTMLElement | null);
+  useEffect(() => {
+    if (!el) return;
+    const stop = () => { goal.current = null; camGoal.current = null; };
+    let down: [number, number] | null = null;
+    const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
+    const onMove = (e: PointerEvent) => {
+      if (down && e.buttons && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) { stop(); down = null; }
+    };
+    const onUp = () => { down = null; };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [el]);
+  const preset = useStore((s) => s.cameraPreset);
+  useEffect(() => {
+    if (!preset) return;
+    const p = PRESET_VIEWS[preset.name];
+    goal.current = new THREE.Vector3(...p.target);
+    camGoal.current = new THREE.Vector3(...p.camera);
+  }, [preset]);
   useFrame(({ camera }, dt) => {
     const c = controls.current;
     if (!c || !goal.current) return;
@@ -63,7 +100,8 @@ function CameraRig({ controls }: { controls: React.RefObject<OrbitControlsImpl |
     c.target.lerp(goal.current, k);
     if (camGoal.current) camera.position.lerp(camGoal.current, k);
     c.update();
-    if (c.target.distanceTo(goal.current) < 0.1) { goal.current = null; camGoal.current = null; }
+    const camDone = !camGoal.current || camera.position.distanceTo(camGoal.current) < 0.5;
+    if (c.target.distanceTo(goal.current) < 0.1 && camDone) { goal.current = null; camGoal.current = null; }
   });
   return null;
 }
@@ -89,15 +127,7 @@ function assetPosition(id: string | null): V3 | null {
   if (id === "switchyard") return [SWITCHYARD.x, 0, SWITCHYARD.z];
   if (id === "gas") return [118, 0, -34];
   if (id === "battery") return [-150, 0, 32];
-  if (id.startsWith("TRL-") || id.startsWith("TNK-")) {
-    const plant = useStore.getState().plant;
-    const d = plant.deliveries.find((x) => x.shipmentId === id);
-    // Follow the crew once the parts are moving; otherwise look at the truck's bay.
-    if (d && d.status !== "delivered") return [d.pos[0], 0, d.pos[1]];
-    const i = Math.max(0, plant.shipments.findIndex((x) => x.id === id));
-    const bay = DOCK_BAYS[i % DOCK_BAYS.length];
-    return [bay[0], 0, bay[1]];
-  }
+  if (id === "control") return [-120, 0, 66];
   return null;
 }
 
@@ -166,7 +196,7 @@ function Site() {
     <>
       <mesh rotation-x={-Math.PI / 2} receiveShadow>
         <planeGeometry args={[1100, 900]} />
-        <meshStandardMaterial color="#b98e5e" roughness={1} />
+        <meshStandardMaterial color="#d3d7db" roughness={1} />
       </mesh>
       <mesh rotation-x={-Math.PI / 2} position={[cx, 0.05, cz]} receiveShadow>
         <planeGeometry args={[w + 22, d + 22]} />
@@ -246,7 +276,7 @@ const TURBINE_BOXES: BoxSpec[] = [
   { p: [0, 33, -9], s: [5.6, 0.5, 5.6], c: "#5c625e" },
   { p: [8, 2.6, -74], s: [5, 5.2, 4.5], c: "#6f7672" },
 ];
-const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#7d837f" }];
+const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#9aa1a9" }];
 
 function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; selected: boolean }) {
   const x = UNIT_X(index);
@@ -287,13 +317,13 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
             <meshBasicMaterial color={FLOW} />
           </mesh>
         )}
-        <Html position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
+        <Tag position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
           <Label id={tb.id} className={`tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
-            {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.sensors.source === "live" ? "is-on" : ""}`}>{tb.sensors.source === "live" ? "live sensors" : "sensors offline"}</em>}
+            {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.source === "live" ? "is-on" : ""}`}>{tb.source === "live" ? "live sensors" : "sensors offline"}</em>}
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
@@ -457,9 +487,9 @@ function AirCooledCondenser() {
           <meshStandardMaterial map={wallTex} roughness={0.7} />
         </mesh>
       ))}
-      <Html position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
+      <Tag position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
         <Label id="acc" className="tag-muted"><strong>Air-cooled condenser</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -492,9 +522,9 @@ function GasSupply() {
       </mesh>
       {/* metering station where the pipeline enters */}
       <Merged boxes={GAS_BOXES} />
-      <Html position={[118, 9, -34]} center zIndexRange={[10, 0]}>
+      <Tag position={[118, 9, -34]} center zIndexRange={[10, 0]}>
         <Label id="gas" className="tag-muted"><strong>Gas metering</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -531,13 +561,13 @@ function Switchyard() {
     <group>
       <mesh rotation-x={-Math.PI / 2} position={[x, 0.15, z]} receiveShadow>
         <planeGeometry args={[52, 68]} />
-        <meshStandardMaterial color="#c4c0b6" roughness={1} />
+        <meshStandardMaterial color="#d8dbdf" roughness={1} />
       </mesh>
       <Line points={fence} color="#6b6862" lineWidth={1} />
       <Merged boxes={SWITCHYARD_SPECS.boxes} beams={SWITCHYARD_SPECS.beams} cast />
-      <Html position={[x, 18, z]} center zIndexRange={[10, 0]}>
+      <Tag position={[x, 18, z]} center zIndexRange={[10, 0]}>
         <Label id="switchyard" className="tag-muted"><strong>Switchyard</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -606,7 +636,7 @@ function PowerFlow() {
 }
 
 const DC_BOXES: BoxSpec[] = [
-  { p: [0, 8, 62], s: [150, 16, 32], c: "#d6d8d2" },
+  { p: [0, 8, 62], s: [150, 16, 32], c: "#f1f2f4" },
   ...[-50, -20, 10, 40].map((x): BoxSpec => ({ p: [x, 17, 66], s: [10, 2, 8], c: "#a7aba5" })),
 ];
 
@@ -633,12 +663,12 @@ function DataCenter() {
           <boxGeometry args={[3.6, 0.5, 0.2]} />
           <meshStandardMaterial color="#9fc3e6" emissive="#6fa8dc" emissiveIntensity={glow} toneMapped={false} />
         </instancedMesh>
-        <Html position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
+        <Tag position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
           <Label id="datacenter" className="tag-dc">
             <strong>AI data center</strong>
             <span>{demand.toFixed(0)} MW load</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
@@ -660,171 +690,148 @@ function BatteryYard() {
             />
           </mesh>
         ))}
-        <Html position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
+        <Tag position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
           <Label id="battery">
             <strong>Battery</strong>
             <span>{battery.socPct.toFixed(0)}%{discharging ? `, out ${battery.powerMw.toFixed(0)} MW` : ""}</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
 }
 
-function TruckModel({ tanker }: { tanker: boolean }) {
-  return (
-    <>
-      {tanker ? (
-        <mesh position={[0, 2.4, -2]} rotation-x={Math.PI / 2} castShadow>
-          <cylinderGeometry args={[1.5, 1.5, 9, 14]} />
-          <meshStandardMaterial color="#d9dcd6" metalness={0.4} roughness={0.4} />
-        </mesh>
-      ) : (
-        <Box p={[0, 2.2, -2]} s={[2.6, 3, 9]} c="#e8e6e0" cast />
-      )}
-      <Box p={[0, 1.8, 4]} s={[2.6, 2.6, 3]} c={FLOW} cast />
-    </>
-  );
-}
-
-// One truck per shipment: on the approach road in its last few kilometres, then parked in its own bay.
-function TruckOnSite({ id, index }: { id: string; index: number }) {
-  const sh = useStore((s) => s.plant.shipments.find((x) => x.id === id));
-  const group = useRef<THREE.Group>(null);
-  const curve = useMemo(() => {
-    const bay = DOCK_BAYS[index % DOCK_BAYS.length];
-    return new THREE.CatmullRomCurve3([...ROAD, [bay[0], 0.3, bay[1] + 10] as V3, [bay[0], 0.3, bay[1]] as V3].map((p) => new THREE.Vector3(...p)));
-  }, [index]);
-  const onSite = !!sh && sh.remainingKm <= ROAD_KM;
-  useFrame(() => {
-    const s = useStore.getState().plant.shipments.find((x) => x.id === id);
-    if (!group.current || !s) return;
-    const u = s.arrived ? 1 : Math.min(1, Math.max(0, 1 - s.remainingKm / ROAD_KM));
-    const p = curve.getPointAt(u);
-    group.current.position.lerp(p, 0.2);
-    if (u < 0.995) {
-      const ahead = curve.getPointAt(Math.min(1, u + 0.01));
-      group.current.lookAt(ahead.x, p.y, ahead.z);
-    }
-  });
-  if (!sh) return null;
-  return (
-    <group ref={group} visible={onSite} position={ROAD[0]}>
-      <Selectable id={sh.id}>
-        <TruckModel tanker={sh.id.startsWith("TNK-")} />
-      </Selectable>
-    </group>
-  );
-}
-
-function Dock() {
-  const shipments = useStore((s) => s.plant.shipments);
-  const onSite = shipments.filter((x) => x.arrived).length;
-  const next = shipments.filter((x) => !x.arrived).sort((a, b) => a.remainingKm - b.remainingKm)[0];
-  return (
-    <>
-      <Line points={ROAD} color={ASPHALT} lineWidth={7} />
-      <mesh rotation-x={-Math.PI / 2} position={[150, 0.12, 88]} receiveShadow>
-        <planeGeometry args={[52, 22]} />
-        <meshStandardMaterial color="#9d988e" roughness={1} />
-      </mesh>
-      <Merged boxes={DOCK_BOXES} cast />
-      <Html position={[150, 15, 68]} center distanceFactor={110} zIndexRange={[10, 0]}>
-        <Label id={next?.id ?? shipments[0].id}>
-          <strong>Delivery dock</strong>
-          <span>
-            {next
-              ? next.remainingKm <= ROAD_KM
-                ? `${next.id} arriving, ${(next.remainingKm * 1000).toFixed(0)} m out`
-                : `${onSite} on site. Next: ${next.id}, ${next.remainingKm.toFixed(0)} km`
-              : `${onSite} trucks on site`}
-          </span>
-        </Label>
-      </Html>
-      {shipments.map((sh, i) => <TruckOnSite key={sh.id} id={sh.id} index={i} />)}
-    </>
-  );
-}
-
-const DOCK_BOXES: BoxSpec[] = [
-  { p: [150, 5, 68], s: [24, 10, 14], c: "#cfcac0" },
-  // bay markers
-  ...DOCK_BAYS.map(([x, z]): BoxSpec => ({ p: [x, 0.2, z - 6], s: [4, 0.1, 0.5], c: "#e0a100" })),
-];
-
 const VEST = "#ff7a1a";
+const PHONE_VEST = "#2f6fde";
+const PRIORITY_COLOR = { P1: "#d0312d", P2: "#d99a00", P3: "#2f6fde" } as const;
 
-function Worker({ offset, phase }: { offset: [number, number]; phase: number }) {
+function Person({ vest, walking, phase }: { vest: string; walking: boolean; phase: number }) {
   const g = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
-    if (g.current) g.current.position.y = Math.abs(Math.sin(clock.elapsedTime * 6 + phase)) * 0.25;
+    if (g.current) g.current.position.y = walking ? Math.abs(Math.sin(clock.elapsedTime * 6 + phase)) * 0.25 : 0;
   });
   return (
-    <group ref={g} position={[offset[0], 0, offset[1]]}>
+    <group ref={g}>
       <mesh position={[0, 1.1, 0]} castShadow>
         <capsuleGeometry args={[0.45, 1.2, 4, 8]} />
-        <meshStandardMaterial color={VEST} />
+        <meshStandardMaterial color={vest} />
       </mesh>
       <mesh position={[0, 2.35, 0]}>
         <sphereGeometry args={[0.38, 10, 8]} />
-        <meshStandardMaterial color="#f2f2ee" />
+        <meshStandardMaterial color="#e9d3bf" />
+      </mesh>
+      {/* hard hat */}
+      <mesh position={[0, 2.6, 0]}>
+        <sphereGeometry args={[0.44, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2]} />
+        <meshStandardMaterial color="#f6f6f2" />
       </mesh>
     </group>
   );
 }
 
-// A delivery crew walking the service road with the parts; the label carries the live ETA.
-function Crew({ shipmentId }: { shipmentId: string }) {
-  const d = useStore((s) => s.plant.deliveries.find((x) => x.shipmentId === shipmentId));
-  const t = useStore((s) => s.plant.t);
+// An engineer on site. Position comes from the plant state; the phone engineer's moves come from their GPS.
+function EngineerFigure({ id }: { id: string }) {
+  const e = useStore((s) => s.plant.engineers.find((x) => x.id === id));
+  const r = useStore((s) => s.plant.requests.find((x) => x.engineerId === id && x.status !== "resolved" && x.status !== "cancelled"));
   const group = useRef<THREE.Group>(null);
   useFrame(() => {
-    const cur = useStore.getState().plant.deliveries.find((x) => x.shipmentId === shipmentId);
+    const cur = useStore.getState().plant.engineers.find((x) => x.id === id);
     if (!group.current || !cur) return;
-    group.current.position.lerp(new THREE.Vector3(cur.pos[0], 0.2, cur.pos[1]), 0.12);
+    const target = new THREE.Vector3(cur.pos[0], 0.2, cur.pos[1]);
+    if (group.current.position.distanceTo(target) > 0.05) {
+      const ahead = target.clone();
+      group.current.position.lerp(target, 0.15);
+      if (cur.status === "walking") group.current.lookAt(ahead.x, 0.2, ahead.z);
+    }
   });
-  // The path array keeps its identity between ticks, so the line is built once per delivery.
-  const path = d?.path;
-  const done = d?.status === "delivered";
-  const remaining = useMemo<V3[] | null>(() => (path && !done ? path.map(([x, z]) => [x, 0.6, z] as V3) : null), [path, done]);
-  // Crews stay visible for a minute after delivery so the drop-off is easy to spot.
-  if (!d || (d.deliveredT !== null && t - d.deliveredT > 60)) return null;
-  const offsets: [number, number][] = [[0, 0], [1.6, 0.9], [-1.4, 1.1], [0.4, -1.5]].slice(0, d.workers) as [number, number][];
-  const walking = d.status === "carrying";
+  const path = r?.path;
+  const walking = r?.status === "en-route";
+  const line = useMemo<V3[] | null>(() => (path && path.length > 1 ? path.map(([x, z]) => [x, 0.6, z] as V3) : null), [path]);
+  if (!e) return null;
+  const vest = e.kind === "phone" ? PHONE_VEST : VEST;
+  const doing = !r ? "available"
+    : r.status === "dispatched" ? `sent to ${r.asset}, not accepted yet`
+    : r.status === "en-route" ? `to ${r.asset}, ${etaText(r.etaMin)}`
+    : r.status === "on-site" ? `at ${r.asset}`
+    : `repairing ${r.asset}, ${r.repairLeftS} s`;
   return (
     <>
-      {remaining && <Line points={remaining} color={VEST} lineWidth={1.5} dashed dashSize={2} gapSize={2} />}
-      <group ref={group} position={[d.pos[0], 0.2, d.pos[1]]}>
-        {/* Drawn larger than life so a crew is readable from the default camera. */}
-        <group scale={1.8}>
-        <Selectable id={d.shipmentId}>
-          {offsets.map((o, i) => (walking ? <Worker key={i} offset={o} phase={i * 1.3} /> : (
-            <group key={i} position={[o[0], 0, o[1]]}>
-              <mesh position={[0, 1.1, 0]}><capsuleGeometry args={[0.45, 1.2, 4, 8]} /><meshStandardMaterial color={VEST} /></mesh>
-              <mesh position={[0, 2.35, 0]}><sphereGeometry args={[0.38, 10, 8]} /><meshStandardMaterial color="#f2f2ee" /></mesh>
-            </group>
-          )))}
-          {d.status !== "delivered" && <Box p={[0.2, 1.6, 0.4]} s={[1.6, 1, 1.2]} c="#8a6a3c" />}
-        </Selectable>
+      {line && (r?.status === "en-route" || r?.status === "dispatched") && (
+        <Line points={line} color={vest} lineWidth={1.5} dashed dashSize={2} gapSize={2} />
+      )}
+      <group ref={group} position={[e.pos[0], 0.2, e.pos[1]]}>
+        {/* Drawn larger than life so a person is readable from the default camera. */}
+        <group scale={1.9}>
+          <Selectable id={r?.asset ?? "control"}>
+            <Person vest={vest} walking={!!walking} phase={id.length} />
+          </Selectable>
         </group>
-        <Html position={[0, 8, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
-          <Label id={d.shipmentId} className="tag-crew">
-            <strong>{d.crew}</strong>
-            <span>
-              {d.status === "unloading" && `unloading ${d.shipmentId}, ${Math.ceil(d.unloadLeftS)} s`}
-              {d.status === "carrying" && `to ${d.toLabel}, ${d.etaMin < 1 ? `${Math.max(1, Math.round(d.etaMin * 60))} s` : `${d.etaMin.toFixed(1)} min`}`}
-              {d.status === "delivered" && `delivered to ${d.toLabel}`}
-            </span>
+        <Tag position={[0, 8, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
+          <Label id={r?.asset ?? "control"} className={`tag-crew ${e.kind === "phone" ? "tag-phone" : ""}`}>
+            <strong>{e.name}</strong>
+            <span>{doing}</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </>
   );
 }
 
-function Crews() {
-  const ids = useStore((s) => s.plant.deliveries.map((d) => d.shipmentId).join(","));
-  return <>{ids ? ids.split(",").map((id) => <Crew key={id} shipmentId={id} />) : null}</>;
+function Engineers() {
+  const ids = useStore((s) => s.plant.engineers.map((e) => e.id).join(","));
+  return <>{ids.split(",").filter(Boolean).map((id) => <EngineerFigure key={id} id={id} />)}</>;
+}
+
+// A pulsing ring on the ground under any asset with an open request, coloured by priority.
+function RequestMarker({ id }: { id: string }) {
+  const r = useStore((s) => s.plant.requests.find((x) => x.id === id));
+  const ring = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (!ring.current) return;
+    const k = (clock.elapsedTime % 1.6) / 1.6;
+    ring.current.scale.setScalar(1 + k * 0.35);
+    (ring.current.material as THREE.MeshBasicMaterial).opacity = 0.65 * (1 - k);
+  });
+  if (!r) return null;
+  const p = assetPosition(r.asset);
+  if (!p) return null;
+  const big = r.asset === "acc" || r.asset === "switchyard" || r.asset === "datacenter";
+  return (
+    <group position={[p[0], 0.4, p[2]]}>
+      <mesh ref={ring} rotation-x={-Math.PI / 2}>
+        <ringGeometry args={[big ? 30 : 17, big ? 32 : 18.5, 64]} />
+        <meshBasicMaterial color={PRIORITY_COLOR[r.priority]} transparent depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function RequestMarkers() {
+  const ids = useStore((s) => s.plant.requests.filter((r) => r.status !== "resolved" && r.status !== "cancelled").map((r) => r.id).join(","));
+  return <>{ids ? ids.split(",").map((id) => <RequestMarker key={id} id={id} />) : null}</>;
+}
+
+function ControlRoom() {
+  return (
+    <Tag position={[-120, 13, 72]} center zIndexRange={[10, 0]}>
+      <Label id="control" className="tag-muted"><strong>Control room</strong></Label>
+    </Tag>
+  );
+}
+
+// Neutral engineering backdrop: flat grey, soft room reflections, no sky.
+function Studio() {
+  const { scene, gl } = useThree();
+  useEffect(() => {
+    scene.background = new THREE.Color("#dde1e5");
+    scene.fog = new THREE.Fog("#dde1e5", 420, 900);
+    const pmrem = new THREE.PMREMGenerator(gl);
+    const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = env;
+    scene.environmentIntensity = 0.45;
+    return () => { scene.environment = null; scene.fog = null; env.dispose(); pmrem.dispose(); };
+  }, [scene, gl]);
+  return null;
 }
 
 function Scene() {
@@ -832,11 +839,10 @@ function Scene() {
   const selected = useStore((s) => s.selected);
   return (
     <>
-      <Sky sunPosition={[-1, 0.06, -0.35]} turbidity={9} rayleigh={2.4} mieCoefficient={0.006} mieDirectionalG={0.85} />
-      <fog attach="fog" args={["#d9b48f", 320, 760]} />
-      <hemisphereLight args={["#c7d3e8", "#8a6a48", 0.9]} />
+      <Studio />
+      <hemisphereLight args={["#ffffff", "#c4c9cf", 0.7]} />
       <directionalLight
-        position={[-200, 80, -110]} intensity={2.2} color="#ffd2a1" castShadow
+        position={[-160, 220, -90]} intensity={1.6} color="#ffffff" castShadow
         shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004}
         shadow-camera-left={-240} shadow-camera-right={240} shadow-camera-top={170} shadow-camera-bottom={-170} shadow-camera-far={600}
       />
@@ -849,8 +855,9 @@ function Scene() {
       <PowerFlow />
       <DataCenter />
       <BatteryYard />
-      <Dock />
-      <Crews />
+      <ControlRoom />
+      <RequestMarkers />
+      <Engineers />
     </>
   );
 }
@@ -866,13 +873,24 @@ function FrameCap({ fps }: { fps: number }) {
   return null;
 }
 
+// Labels mount into the same element the canvas takes events from. Left to drei's default, a label that
+// mounts before the canvas connects its events switches container afterwards, and React then throws on unmount.
+const LabelRoot = createContext<RefObject<HTMLDivElement>>({ current: null! });
+function Tag(props: ComponentProps<typeof Html>) {
+  return <Html portal={useContext(LabelRoot)} {...props} />;
+}
+
 export function PlantScene() {
+  const root = useRef<HTMLDivElement>(null!);
   const controls = useRef<OrbitControlsImpl>(null);
   const select = useStore((s) => s.select);
   // Fixed for the session: changing resolution mid-run reallocates every buffer and stalls for about a second.
   const dpr = Math.min(window.devicePixelRatio, 1.5);
   return (
+    <div ref={root} className="scene-root">
+    <LabelRoot.Provider value={root}>
     <Canvas
+      eventSource={root}
       shadows={{ type: THREE.PCFShadowMap }}
       dpr={dpr}
       frameloop="demand"
@@ -889,5 +907,7 @@ export function PlantScene() {
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
       <CameraRig controls={controls} />
     </Canvas>
+    </LabelRoot.Provider>
+    </div>
   );
 }
