@@ -87,7 +87,7 @@ Scan the QR code in Expo Go. The phone giving the hotspot can be the engineer ph
 
 Sends forecasts to `http://<host-ip>:8787/api/prediction` with `MODEL_TOKEN`. Format in `ml/README.md`.
 
-### 5. Sensor board (Arduino / ESP32)
+### 5. Sensor board (Arduino UNO R4 WiFi)
 
 The board joins the same hotspot and POSTs GT-08's six readings to the host once a second. Use it in place of `npm run board`.
 
@@ -112,63 +112,85 @@ curl -X POST http://<host-ip>:8787/api/ingest \
   -d '{"device":"test","seq":1,"uptime_ms":1,"readings":{"type":"M","air_temp_k":299.1,"process_temp_k":309.6,"rpm":1480,"torque_nm":43.2,"tool_wear_min":12}}'
 ```
 
-ESP32 sketch (Arduino IDE, ESP32 board package). Put the Wi-Fi details, server address and token in `secrets.h`, which git ignores:
+Sketch for the **Arduino UNO R4 WiFi** (the R4 Minima has no Wi-Fi). In the Arduino IDE install the "Arduino UNO R4 Boards" package; `WiFiS3` comes with it, so no extra libraries are needed. Keep the sketch in `firmware/` and put the Wi-Fi details, the host address and the token in `secrets.h` next to it; git ignores `secrets.h` in that folder:
 
 ```cpp
 // secrets.h
-#define WIFI_SSID   "hotspot-name"
-#define WIFI_PASS   "hotspot-password"
-#define SERVER_URL  "http://<host-ip>:8787/api/ingest"
+#define WIFI_SSID    "hotspot-name"
+#define WIFI_PASS    "hotspot-password"
+#define SERVER_HOST  "192.168.x.x"   // host laptop, from ip -4 addr
+#define SERVER_PORT  8787
 #define DEVICE_TOKEN "<DEVICE_TOKEN>"
 ```
 
 ```cpp
-#include <WiFi.h>
-#include <HTTPClient.h>
+#include <WiFiS3.h>
 #include "secrets.h"
 
-uint32_t seq = 0;
+unsigned long seq = 0;
 float toolWearMin = 0;
+
+void connectWifi() {
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Joining Wi-Fi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    delay(3000);
+  }
+  Serial.print("Connected, board IP ");
+  Serial.println(WiFi.localIP());
+}
 
 void setup() {
   Serial.begin(115200);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) delay(250);
+  connectWifi();
 }
 
 void loop() {
-  // Replace with real sensor reads.
+  // Replace with real sensor reads. Temperatures go in kelvin (Celsius + 273.15).
   float airK = 25.0 + 273.15;
   float processK = 35.5 + 273.15;
   float rpm = 1480;
   float torqueNm = 43.2;
   toolWearMin += 1.0 / 60.0;
 
-  char body[256];
-  snprintf(body, sizeof body,
-    "{\"device\":\"plant-sensor-1\",\"seq\":%lu,\"uptime_ms\":%lu,"
-    "\"readings\":{\"type\":\"M\",\"air_temp_k\":%.1f,\"process_temp_k\":%.1f,"
-    "\"rpm\":%.0f,\"torque_nm\":%.1f,\"tool_wear_min\":%.0f}}",
-    (unsigned long)seq++, (unsigned long)millis(), airK, processK, rpm, torqueNm, toolWearMin);
+  String body = String("{\"device\":\"plant-sensor-1\",\"seq\":") + seq++ +
+    ",\"uptime_ms\":" + millis() +
+    ",\"readings\":{\"type\":\"M\"" +
+    ",\"air_temp_k\":" + String(airK, 1) +
+    ",\"process_temp_k\":" + String(processK, 1) +
+    ",\"rpm\":" + String(rpm, 0) +
+    ",\"torque_nm\":" + String(torqueNm, 1) +
+    ",\"tool_wear_min\":" + String(toolWearMin, 0) + "}}";
   Serial.println(body);
 
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(SERVER_URL);
-    http.setTimeout(2000);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
-    int code = http.POST(body);
-    if (code != 200) Serial.printf("server replied %d\n", code);
-    http.end();
+  if (WiFi.status() != WL_CONNECTED) connectWifi();
+
+  WiFiClient client;
+  client.setConnectionTimeout(2000);
+  if (client.connect(SERVER_HOST, SERVER_PORT)) {
+    client.println("POST /api/ingest HTTP/1.1");
+    client.print("Host: "); client.println(SERVER_HOST);
+    client.println("Content-Type: application/json");
+    client.print("Authorization: Bearer "); client.println(DEVICE_TOKEN);
+    client.print("Content-Length: "); client.println(body.length());
+    client.println("Connection: close");
+    client.println();
+    client.print(body);
+
+    // First line of the reply, e.g. "HTTP/1.1 200 OK". 401 means a wrong token, 400 a reading out of range.
+    unsigned long start = millis();
+    while (!client.available() && millis() - start < 2000) delay(10);
+    if (client.available()) Serial.println(client.readStringUntil('\n'));
+    client.stop();
   } else {
-    WiFi.reconnect();
+    Serial.println("Can't reach the server. Check SERVER_HOST and that the server is running.");
   }
+
   delay(1000);
 }
 ```
 
-If the ML laptop needs the readings too, add a second `http.begin(...)` / `POST` to its address in the same loop.
+Open Serial Monitor at 115200 baud: each second it prints the JSON and `HTTP/1.1 200 OK`. If the ML laptop needs the readings too, repeat the `client.connect(...)` block with its address and path.
 
 When it works, GT-08 shows "Live sensor" on the website within a second, and it trips on the dataset's own failure rules (see `firmware/README.md`).
 
