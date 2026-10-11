@@ -282,6 +282,7 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   const x = UNIT_X(index);
   const color = STATUS_COLOR[tb.status];
   const alarm = tb.status === "watch" || tb.status === "tripped";
+  const recommended = useStore((s) => s.plant.recommendations.some((r) => r.asset === tb.id && r.status === "pending"));
   const plume = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
     if (!plume.current) return;
@@ -318,9 +319,10 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
           </mesh>
         )}
         <Tag position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
-          <Label id={tb.id} className={`tag-${tb.status}`}>
+          <Label id={tb.id} className={`tag-${recommended && tb.status === "running" ? "watch" : tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
+            {recommended && <em className="tag-rec">needs decision</em>}
             {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.source === "live" ? "is-on" : ""}`}>{tb.source === "live" ? "live sensors" : "sensors offline"}</em>}
           </Label>
         </Tag>
@@ -514,7 +516,8 @@ const GAS_BOXES: BoxSpec[] = [
 
 function GasSupply() {
   const gas = useStore((s) => s.plant.gas);
-  const tone = !gas.connected ? "tag-muted" : gas.level === "poor" ? "tag-tripped" : gas.level === "reduced" ? "tag-watch" : "tag-muted";
+  const recommended = useStore((s) => s.plant.recommendations.some((r) => r.asset === "gas" && r.status === "pending"));
+  const tone = gas.connected && gas.level === "poor" ? "tag-tripped" : recommended || (gas.connected && gas.level === "reduced") ? "tag-watch" : "tag-muted";
   return (
     <Selectable id="gas">
     <group>
@@ -528,6 +531,7 @@ function GasSupply() {
         <Label id="gas" className={tone}>
           <strong>Gas metering</strong>
           {gas.connected && gas.qualityPct !== null && <em className="tag-live is-on">{gas.level === "poor" ? `air ${gas.qualityPct}%, possible leak` : `air quality ${gas.qualityPct}%`}</em>}
+          {recommended && gas.level !== "poor" && <em className="tag-rec">needs decision</em>}
         </Label>
       </Tag>
     </group>

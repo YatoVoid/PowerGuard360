@@ -301,13 +301,41 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
   );
 }
 
+const assetName = (asset: string) => (asset.startsWith("GT-") ? asset : assetLabel(asset));
+
+// Recommendations still waiting for the manager, most urgent first. They outlive the reading that raised
+// them, so the plant view has to show them on their own rather than through the current risk ranking.
+function usePendingRecs() {
+  const recs = useStore((s) => s.plant.recommendations);
+  return recs.filter((r) => r.status === "pending").sort((a, b) => b.risk - a.risk || b.createdT - a.createdT);
+}
+
+function PendingStrip({ shown }: { shown: string }) {
+  const select = useStore((s) => s.select);
+  const others = usePendingRecs().filter((r) => r.asset !== shown);
+  if (!others.length) return null;
+  return (
+    <div className="pending-strip" role="status">
+      <strong>{others.length === 1 ? "Maintenance recommended" : `${others.length} maintenance recommendations`}</strong>
+      <span>
+        {others.map((r) => (
+          <button key={r.id} type="button" className="link" onClick={() => select(r.asset)}>{assetName(r.asset)} ({Math.round(r.risk * 100)}%)</button>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 export function AssetDetail() {
   const selected = useStore((s) => s.selected);
-  const fallback = useStore((s) => s.plant.predictions[0]?.turbineId ?? "GT-01");
-  const asset = selected ?? fallback;
+  const riskiest = useStore((s) => s.plant.predictions[0]?.turbineId ?? "GT-01");
+  const waiting = usePendingRecs()[0];
+  const asset = selected ?? waiting?.asset ?? riskiest;
   return (
     <>
-      <AssetBody />
+      <PendingStrip shown={asset} />
+      {!selected && <p className="hint">{waiting ? `${waiting.id} is waiting for your decision on ${assetName(waiting.asset)}.` : "Showing the unit most at risk."} Click any unit to switch.</p>}
+      <AssetBody asset={asset} />
       <MaintenanceBox asset={asset} />
     </>
   );
@@ -437,19 +465,8 @@ function GasDetail() {
   );
 }
 
-function AssetBody() {
-  const selected = useStore((s) => s.selected);
+function AssetBody({ asset: selected }: { asset: string }) {
   const plant = useStore((s) => s.plant);
-  if (!selected) {
-    const riskiest = plant.predictions[0]?.turbineId;
-    const tb = plant.turbines.find((x) => x.id === riskiest) ?? plant.turbines[0];
-    return (
-      <>
-        <p className="hint">Showing the unit most at risk. Click any unit to switch.</p>
-        <TurbineDetail tb={tb} />
-      </>
-    );
-  }
   const tb = plant.turbines.find((x) => x.id === selected);
   if (tb) return <TurbineDetail tb={tb} />;
   if (selected === "battery") {
@@ -522,6 +539,7 @@ export function AlarmList({ events, limit = 8, empty = "No alarms." }: { events:
 
 export function TurbineStrip() {
   const turbines = useStore((s) => s.plant.turbines);
+  const pending = new Set(usePendingRecs().map((r) => r.asset));
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
   return (
@@ -530,13 +548,13 @@ export function TurbineStrip() {
         <li key={tb.id}>
           <button
             type="button"
-            className={`unit unit-${tb.status} ${selected === tb.id ? "is-selected" : ""}`}
+            className={`unit unit-${tb.status} ${pending.has(tb.id) ? "has-rec" : ""} ${selected === tb.id ? "is-selected" : ""}`}
             aria-pressed={selected === tb.id}
             onClick={() => select(tb.id)}
           >
             <span className="unit-id">{tb.id}</span>
             <span className="unit-mw">{tb.status === "running" || tb.status === "watch" ? fmt(tb.outputMw) : "0"}<small> MW</small></span>
-            <span className="unit-meta">{tb.status === "running" || tb.status === "watch" ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status[0].toUpperCase() + tb.status.slice(1)}</span>
+            <span className="unit-meta">{pending.has(tb.id) ? "Needs a decision" : tb.status === "running" || tb.status === "watch" ? `wear ${fmt(tb.features.toolWearMin)} min` : tb.status[0].toUpperCase() + tb.status.slice(1)}</span>
             <span className="unit-bar"><span style={{ transform: `scaleX(${tb.outputMw / tb.ratedMw})` }} /></span>
           </button>
         </li>

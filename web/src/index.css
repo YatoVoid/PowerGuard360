@@ -616,3 +616,11 @@ h1, h2, h3, h4 { margin: 0; }
 .side-status + .side-status { margin-top: 10px; }
 .tag-tripped .tag-live.is-on { color: #fff; }
 .tag-tripped .tag-live.is-on::before { background: #fff; }
+
+/* recommendations waiting for the manager, outside the maintenance board */
+.tag-rec { display: block; font-style: normal; font-size: 11px; font-weight: 600; color: var(--watch-ink); }
+.tag-tripped .tag-rec { color: #fff; }
+.unit.has-rec { border-color: var(--watch); box-shadow: inset 0 0 0 1px var(--watch); }
+.unit.has-rec .unit-meta { color: var(--watch-ink); font-weight: 600; }
+.pending-strip { display: grid; gap: 4px; margin-bottom: 12px; padding: 9px 11px; background: var(--watch-bg); border: 1px solid #f0d58a; border-radius: var(--radius-s); color: var(--watch-ink); font-size: 13px; }
+.pending-strip span { display: flex; flex-wrap: wrap; gap: 4px 12px; }
