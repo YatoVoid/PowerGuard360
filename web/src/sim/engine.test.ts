@@ -184,3 +184,37 @@ describe("ML laptop forecast", () => {
     expect(s.predictions.find((x) => x.turbineId === "GT-08")!.by).toBe("Decision tree");
   });
 });
+
+describe("machine_learning service forecast", () => {
+  const ml = (failureClass: 0 | 1) => ({
+    failureClass, alertLevel: failureClass ? "Critical" as const : "Normal" as const, threshold: 0.61,
+    types: failureClass ? [{ code: "HDF" as const, name: "Heat dissipation failure", probability: 0.91 }] : [],
+    factors: null, action: failureClass ? "Inspect cooling." : "No action.",
+  });
+
+  it("scores every unit it is given and keeps the diagnosis", () => {
+    const remote = [
+      { unit: "GT-01", probability: 0.96, mode: "HDF" as const, detail: "Heat dissipation failure detected", model: "Random Forest", ml: ml(1) },
+      { unit: "GT-02", probability: 0.01, mode: null, model: "Random Forest", ml: ml(0) },
+    ];
+    const s = step(createPlant(), { remote, remoteAtMs: 1000, nowMs: 2000 });
+    const p1 = s.predictions.find((x) => x.turbineId === "GT-01")!;
+    expect(p1).toMatchObject({ by: "Random Forest", mode: "HDF", risk: 0.96, detail: "Heat dissipation failure detected" });
+    expect(p1.ml?.action).toBe("Inspect cooling.");
+    expect(s.turbines[0].status).toBe("watch");
+    expect(s.predictions.find((x) => x.turbineId === "GT-02")!.by).toBe("Random Forest");
+    expect(s.predictions.find((x) => x.turbineId === "GT-03")!.by).toBe("Decision tree");
+  });
+
+  it("still forecasts tool wear when the classifier sees no failure", () => {
+    let s = createPlant();
+    let i = 0;
+    for (; i < 3000 && forecast("GT-01", s.turbines[0].features).minutesToFailure === null; i++) s = step(s, {});
+    const remote = [{ unit: "GT-01", probability: 0.02, mode: null, model: "Random Forest", ml: ml(0) }];
+    s = step(s, { remote, remoteAtMs: 1000, nowMs: 2000 });
+    const tree = forecast("GT-01", s.turbines[0].features);
+    const p = s.predictions.find((x) => x.turbineId === "GT-01")!;
+    expect(tree.minutesToFailure).not.toBeNull();
+    expect(p).toMatchObject({ by: "Random Forest", probability: 0.02, mode: tree.mode, minutesToFailure: tree.minutesToFailure });
+  });
+});

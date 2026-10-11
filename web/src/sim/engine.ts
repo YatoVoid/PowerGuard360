@@ -20,7 +20,7 @@ const EVENT_LEN = 60;
 // Wi-Fi on a small board drops a post now and then; only call it offline after a real silence.
 const SENSOR_STALE_MS = 15000;
 // The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
-const REMOTE_STALE_MS = 15000;
+export const REMOTE_STALE_MS = 15000;
 // Raise a P3 request when a failure is forecast within this many minutes.
 export const REQUEST_LEAD_MIN = 2;
 export const WATCH_RISK = 0.5;
@@ -131,6 +131,12 @@ function erfc(x: number) {
 // - tool wear: the dataset's failure rate once a tool passes 200 minutes.
 export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Prediction {
   const probability = failureProbability(f);
+  return withLookahead(id, probability, f, wearPerRow, `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`, "Decision tree");
+}
+
+// A probability on the current reading, raised by the wear lookahead: the classifiers score one reading,
+// so on their own they can't say a worn tool is minutes from overstraining.
+function withLookahead(id: string, probability: number, f: Features, wearPerRow: number, detail: string, by: string): Prediction {
   const limit = OSF_LIMIT[f.type];
   const rowsPerMin = 60 / ROW_SECONDS;
   const rate = Math.max(0.5, wearPerRow);
@@ -167,9 +173,17 @@ export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Pr
     mode: lead?.mode ?? null,
     minutesToFailure: soonest?.min ?? null,
     risk: Math.round(risk * 100) / 100,
-    detail: lead ? lead.detail : `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`,
-    by: "Decision tree",
+    detail: lead ? lead.detail : detail,
+    by,
   };
+}
+
+// The machine_learning service: when Model 1 flags a failure its diagnosis leads; otherwise its risk
+// goes through the same wear lookahead as the tree, which covers the tool-wear failures Model 1 misses.
+function fromService(r: RemotePrediction & { ml: NonNullable<RemotePrediction["ml"]> }, f: Features, wearPerRow: number): Prediction {
+  const by = r.model || "Random Forest";
+  if (r.ml.failureClass === 1) return { ...fromRemote(r), by, ml: r.ml };
+  return { ...withLookahead(r.unit, r.probability, f, wearPerRow, r.detail ?? `${by} gives ${Math.round(r.probability * 100)}% failure risk on the current reading`, by), ml: r.ml };
 }
 
 function fromRemote(r: RemotePrediction): Prediction {
@@ -302,11 +316,26 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     }
   }
 
+  const remoteFresh = inputs.remote && inputs.remoteAtMs !== undefined && (inputs.nowMs ?? 0) - inputs.remoteAtMs < REMOTE_STALE_MS;
+  const remotes = inputs.remote ? [inputs.remote].flat() : [];
+  for (const tb of turbines) {
+    if (tb.status !== "tripped") { tb.diagnosis = null; tb.tripReading = null; continue; }
+    tb.tripReading ??= { ...tb.features };
+    const r = remoteFresh ? remotes.find((p) => p.unit === tb.id) : undefined;
+    if (tb.diagnosis || !r?.ml?.onTrip) continue;
+    tb.diagnosis = r.ml;
+    const types = r.ml.types.map((t) => t.name.toLowerCase()).join(" and ");
+    log(r.ml.failureClass ? "trip" : "info", tb.id, r.ml.failureClass
+      ? `${tb.id} model diagnosis: ${types || "failure, type unclear"} (${Math.round(r.probability * 100)}% risk)`
+      : `${tb.id} model diagnosis: trip reading not flagged (${Math.round(r.probability * 100)}% risk)`);
+  }
+
   const predictions: Prediction[] = turbines
     .filter((x) => x.status !== "tripped" && x.status !== "offline")
     .map((x) => {
-      const remoteFresh = inputs.remote && inputs.remoteAtMs !== undefined && (inputs.nowMs ?? 0) - inputs.remoteAtMs < REMOTE_STALE_MS;
-      return remoteFresh && inputs.remote!.unit === x.id ? fromRemote(inputs.remote!) : forecast(x.id, x.features, wearRate[x.id]);
+      const r = remoteFresh ? remotes.find((p) => p.unit === x.id) : undefined;
+      if (!r) return forecast(x.id, x.features, wearRate[x.id]);
+      return r.ml ? fromService({ ...r, ml: r.ml }, x.features, wearRate[x.id]) : fromRemote(r);
     })
     .sort((a, b) => b.risk - a.risk);
 

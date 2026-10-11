@@ -5,6 +5,7 @@ import { PlantHost } from "./plant.ts";
 import type { z } from "zod";
 import { ClientMessage, RemotePrediction, SensorReading, dropBadReadings } from "./protocol.ts";
 import { CopilotLimiter, CopilotRequest, askGemini } from "./copilot.ts";
+import { MlScorer } from "./ml.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? "";
@@ -57,6 +58,9 @@ const MAX_BODY = 4 * 1024;
 const ACTIONS_PER_SECOND = 20;
 
 const host = new PlantHost();
+// machine_learning/api.py. Set ML_SERVICE_URL=off to run on the decision tree alone.
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL ?? "http://127.0.0.1:8790";
+const ml = ML_SERVICE_URL === "off" ? null : new MlScorer(ML_SERVICE_URL.replace(/\/$/, ""), (preds) => host.scored(preds));
 
 function send(res: ServerResponse, status: number, body: unknown) {
   const text = JSON.stringify(body);
@@ -182,6 +186,7 @@ setInterval(() => {
 
 setInterval(() => {
   const plant = host.tick();
+  ml?.score(plant);
   const msg = JSON.stringify({ type: "state", plant });
   for (const ws of wss.clients) if (ws.readyState === ws.OPEN) ws.send(msg);
 }, 1000);

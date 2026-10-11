@@ -1,4 +1,4 @@
-import { createPlant, step } from "../../web/src/sim/engine.ts";
+import { REMOTE_STALE_MS, createPlant, step } from "../../web/src/sim/engine.ts";
 import type { PlantState, RemotePrediction, SensorReading, StepInputs } from "../../web/src/types.ts";
 import type { Action } from "./protocol.ts";
 
@@ -10,6 +10,7 @@ export class PlantHost {
   private sensorAtMs: number | undefined;
   private remote: RemotePrediction | null = null;
   private remoteAtMs: number | undefined;
+  private service = new Map<string, { p: RemotePrediction; atMs: number }>();
 
   private empty() {
     return { tripRequests: [], resetRequests: [], newRequests: [], accept: [], walkM: [], autoWalk: [], startRepair: [], cancel: [] };
@@ -39,6 +40,19 @@ export class PlantHost {
     this.remoteAtMs = nowMs;
   }
 
+  // Results from the machine_learning service, one per turbine it scored.
+  scored(preds: RemotePrediction[], nowMs = Date.now()) {
+    for (const p of preds) this.service.set(p.unit, { p, atMs: nowMs });
+  }
+
+  // Fresh forecasts by unit. The ML laptop's own post wins for its unit while it keeps posting.
+  private forecasts(nowMs: number) {
+    const byUnit = new Map<string, RemotePrediction>();
+    for (const [unit, { p, atMs }] of this.service) if (nowMs - atMs < REMOTE_STALE_MS) byUnit.set(unit, p);
+    if (this.remote && this.remoteAtMs !== undefined && nowMs - this.remoteAtMs < REMOTE_STALE_MS) byUnit.set(this.remote.unit, this.remote);
+    return [...byUnit.values()];
+  }
+
   // Engineers whose phone is connected right now. Anyone else on the roster acts on their own,
   // so a job sent to the phone role never stalls just because nobody has the app open.
   phonesOnline = new Set<string>();
@@ -65,7 +79,7 @@ export class PlantHost {
 
   tick(nowMs = Date.now()) {
     this.standIn();
-    this.plant = step(this.plant, { ...this.inputs, sensor: this.sensor, sensorAtMs: this.sensorAtMs, remote: this.remote, remoteAtMs: this.remoteAtMs, nowMs });
+    this.plant = step(this.plant, { ...this.inputs, sensor: this.sensor, sensorAtMs: this.sensorAtMs, remote: this.forecasts(nowMs), remoteAtMs: nowMs, nowMs });
     this.inputs = this.empty();
     this.sensor = null;
     return this.plant;

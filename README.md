@@ -2,14 +2,17 @@
 
 Catches gas turbine failures in sensor data before or as they happen, and sends a maintenance engineer to fix them. The plant manager works from the website (3D plant, dashboard, maintenance board, Gemini copilot). The engineer gets the job on an Android app, walks to the asset with GPS and does the repair. Both stay in sync through the plant server.
 
+Two Random Forest models score every turbine once a second: one detects failures (calibrated risk, 78% recall at 96% precision on 2,000 unseen rows), the other names the failure type (heat dissipation, power, overstrain, tool wear). Each forecast comes with the inputs that drove it (SHAP) and a maintenance action, which the engineer sees on the job.
+
 | Folder | What it is |
 |---|---|
 | `web/` | Website (Vite, React, three.js). Also holds the plant engine in `web/src/sim/` that the server and app share. |
-| `server/` | Plant server: runs the plant, takes sensor readings and ML forecasts, pushes live state to every screen. |
+| `server/` | Plant server: runs the plant, takes sensor readings, asks the ML service for forecasts, pushes live state to every screen. |
+| `machine_learning/` | Failure detection and failure-type models, training pipeline, evaluation report, and the FastAPI service (`api.py`) the plant server calls. |
 | `mobile/` | Engineer app (Expo, Android). |
-| `ml/` | What the ML laptop sends to the server. |
+| `ml/` | What an external ML laptop can post to the server (optional). |
 | `firmware/` | What the sensor board sends to the server, and the board simulator. |
-| `data/` | AI4I 2020 dataset and the script that trains the decision tree. |
+| `data/` | AI4I 2020 dataset and the script that trains the fallback decision tree. |
 
 ## Running the demo
 
@@ -20,9 +23,10 @@ One laptop hosts everything. Everyone joins the same phone hotspot, which also g
         ┌──────────────────┬──────────────────┬───────────────────┐
         │                  │                  │                   │
   HOST LAPTOP           ML LAPTOP        ENGINEER PHONE       JUDGE / extra screen
-  plant server :8787    reads sensor     Expo app             browser
-  website      :5180    data, sends      (USB to host, or     http://<host-ip>:5180
-  board sim             predictions      Wi-Fi to :8787)
+  plant server :8787    (optional)       Expo app             browser
+  ML service   :8790    posts its own    (USB to host, or     http://<host-ip>:5180
+  website      :5180    forecasts        Wi-Fi to :8787)
+  board sim
 ```
 
 ### 1. Host laptop
@@ -40,15 +44,26 @@ sudo ufw allow 8787/tcp
 sudo ufw allow 5180/tcp
 ```
 
-Start each in its own terminal:
+One-time setup of the ML service (Python 3.11 or newer):
 
 ```
+cd machine_learning && python3 -m venv .venv && .venv/bin/pip install -r requirements-api.txt
+```
+
+Start each in its own terminal, the ML service first:
+
+```
+cd machine_learning && .venv/bin/uvicorn api:app --host 127.0.0.1 --port 8790 --no-access-log   # ML service
 cd server && npx tsx --env-file=.env src/server.ts     # plant server, port 8787
 cd web && npx vite --host --port 5180                  # website
 cd server && npm run board -- HDF                      # sensor board simulator
 ```
 
 `server/.env` holds `DEVICE_TOKEN`, `MODEL_TOKEN` and `GEMINI_API_KEY`. It is not in git; get it from Wali.
+
+The plant server prints `[ml] scoring every turbine with Random Forest` once it reaches the ML service. Every second it sends each running turbine's six readings to `machine_learning/api.py`, which answers with Model 1's failure risk, Model 2's failure type, the three inputs that moved the risk most (SHAP) and the maintenance action. The website and phone label those forecasts "Random Forest". When a unit trips, the reading it tripped on is scored once more and shown as the model's diagnosis of the trip. If the ML service stops, the server goes back to the built-in decision tree after 15 seconds. `ML_SERVICE_URL` changes the address; `ML_SERVICE_URL=off` skips it.
+
+For the demo, use `-- PWF` or `-- OSF`: the model catches every recorded power and overstrain failure. The `-- HDF` row is one of the 5 heat failures out of 115 it misses (46% risk), and it misses most tool wear failures (see `machine_learning/README.md`).
 
 The board simulator sends real AI4I rows once a second in the board's format. `npm run board` gives steady readings; `-- HDF`, `-- OSF`, `-- PWF` or `-- TWF` runs 40 seconds into a recorded failure. To also send each reading to the ML laptop:
 
@@ -85,7 +100,7 @@ Scan the QR code in Expo Go. The phone giving the hotspot can be the engineer ph
 
 ### 4. ML laptop
 
-Sends forecasts to `http://<host-ip>:8787/api/prediction` with `MODEL_TOKEN`. Format in `ml/README.md`.
+Optional now that the ML service runs on the host. A laptop that posts to `http://<host-ip>:8787/api/prediction` with `MODEL_TOKEN` overrides the ML service for its unit while it keeps posting. Format in `ml/README.md`.
 
 ### 5. Sensor board (Arduino UNO R4 WiFi)
 
@@ -348,6 +363,7 @@ When it works, GT-08 shows "Live sensor" on the website within a second, and it 
 
 - Plug in the host laptop and the hotspot phone. A hotspot drains a battery fast.
 - The host's address can change if the hotspot restarts. Check `ip -4 addr` again and update the Wi-Fi phone.
+- Check the plant server printed `[ml] scoring every turbine with Random Forest`.
 - Do one full run: board simulator, GT-08 alert on the phone, Accept, walk, website updates, repair.
 - Backup: the Vercel link runs a local simulation when no server is reachable, so the 3D plant and dashboard still work without the hotspot.
 
@@ -365,4 +381,5 @@ Open the website with `?ws=wss://<tunnel-host>/ws` added to the address. The tun
 cd web && npx vitest run && npx tsc -b
 cd server && npx vitest run && npx tsc --noEmit
 cd mobile && npx tsc --noEmit
+cd machine_learning && .venv/bin/python -m pytest -q
 ```
