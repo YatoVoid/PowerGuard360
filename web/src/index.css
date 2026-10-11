@@ -572,3 +572,5 @@ h1, h2, h3, h4 { margin: 0; }
   .copilot { width: 100%; top: 48px; bottom: 64px; z-index: 30; }
 }
 @media (prefers-reduced-motion: reduce) { .cp-busy::after { animation: none; content: "..."; } }
+.live-tag { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: #e3f5ec; color: #137a4b; vertical-align: 1px; }
+.kv dd.muted { color: var(--ink-3); font-weight: 400; }

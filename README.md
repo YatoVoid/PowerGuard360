@@ -192,6 +192,10 @@ void loop() {
 
 Open Serial Monitor at 115200 baud: each second it prints the JSON and `HTTP/1.1 200 OK`. If the ML laptop needs the readings too, repeat the `client.connect(...)` block with its address and path.
 
+To see exactly what the board sends, start the server with `LOG_INGEST=1 npx tsx --env-file=.env src/server.ts`. Every post is printed, and rejected ones say which field was wrong.
+
+The board doesn't have to send all six readings. Whatever it sends drives GT-08 live (marked "Live" on the website); anything it leaves out keeps replaying from the dataset.
+
 When it works, GT-08 shows "Live sensor" on the website within a second, and it trips on the dataset's own failure rules (see `firmware/README.md`).
 
 ### Before judging

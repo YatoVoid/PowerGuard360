@@ -87,6 +87,9 @@ function readJson(req: IncomingMessage, res: ServerResponse, done: (json: unknow
   });
 }
 
+// LOG_INGEST=1 prints every reading as received, for wiring up a new board.
+const LOG_INGEST = process.env.LOG_INGEST === "1";
+
 function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token: string, schema: z.ZodType<T>, accept: (data: T) => void) {
   if (!tokenOk(req, token)) {
     console.warn(`[${name}] rejected request from ${req.socket.remoteAddress}: bad or missing token`);
@@ -94,7 +97,12 @@ function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token:
   }
   readJson(req, res, (json) => {
     const parsed = schema.safeParse(json);
-    if (!parsed.success) return send(res, 400, { error: `invalid ${name}`, issues: parsed.error.issues.slice(0, 5) });
+    if (LOG_INGEST) console.log(`[${name}] ${req.socket.remoteAddress} ${JSON.stringify(json)}`);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.slice(0, 5);
+      console.warn(`[${name}] rejected from ${req.socket.remoteAddress}: ${issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`);
+      return send(res, 400, { error: `invalid ${name}`, issues });
+    }
     accept(parsed.data);
     send(res, 200, { ok: true });
   });

@@ -78,7 +78,7 @@ export function plantContext(p: PlantState, focus?: string | null) {
         trip_cause: tb.tripCause,
         output_mw: Math.round(tb.outputMw),
         capacity_mw: Math.round(tb.capacityMw),
-        data_source: tb.source === "live" ? "live sensor board" : "AI4I 2020 dataset replay",
+        data_source: tb.source === "live" ? `live sensor board for ${tb.measured.join(", ")}; the other readings replay the AI4I 2020 dataset` : "AI4I 2020 dataset replay",
         readings: {
           quality_grade: f.type,
           air_temp_k: f.airTempK,

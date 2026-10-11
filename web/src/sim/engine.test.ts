@@ -135,8 +135,19 @@ describe("GT-08 live sensor board", () => {
     });
     const gt8 = s.turbines[7];
     expect(gt8.source).toBe("live");
-    expect(gt8.row).toBeNull();
+    expect(gt8.measured).toHaveLength(5);
     expect(gt8.features).toMatchObject({ type: "M", rpm: 1500, torqueNm: 42 });
+  });
+
+  it("uses what a partial reading sends and replays the dataset for the rest", () => {
+    const before = createPlant();
+    const s = step(before, { sensor: reading({ type: "M", air_temp_k: 297.4, process_temp_k: 303.8, tool_wear_min: 6 }), sensorAtMs: 1000, nowMs: 1500 });
+    const gt8 = s.turbines[7];
+    expect(gt8.source).toBe("live");
+    expect(gt8.measured.sort()).toEqual(["airTempK", "processTempK", "toolWearMin"]);
+    expect(gt8.features).toMatchObject({ airTempK: 297.4, processTempK: 303.8, toolWearMin: 6 });
+    expect(gt8.features.rpm).toBe(before.turbines[7].features.rpm);
+    expect(s.board.features).toEqual({ type: "M", airTempK: 297.4, processTempK: 303.8, toolWearMin: 6 });
   });
 
   it("trips on live readings that break the dataset's overstrain rule", () => {
