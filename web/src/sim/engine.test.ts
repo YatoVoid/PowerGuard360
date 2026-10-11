@@ -156,3 +156,20 @@ describe("GT-08 live sensor board", () => {
     expect(s.turbines[7].source).toBe("sim");
   });
 });
+
+describe("ML laptop forecast", () => {
+  const remote = { unit: "GT-08", probability: 0.8, mode: "HDF" as const, minutes_to_failure: 1.5, model: "LSTM v2" };
+
+  it("replaces the tree's forecast for its unit while fresh", () => {
+    const s = step(createPlant(), { remote, remoteAtMs: 1000, nowMs: 2000 });
+    const p = s.predictions.find((x) => x.turbineId === "GT-08")!;
+    expect(p).toMatchObject({ by: "LSTM v2", probability: 0.8, mode: "HDF", minutesToFailure: 1.5 });
+    expect(s.turbines[7].status).toBe("watch");
+    expect(s.predictions.find((x) => x.turbineId === "GT-01")!.by).toBe("Decision tree");
+  });
+
+  it("falls back to the tree once the laptop stops posting", () => {
+    const s = step(createPlant(), { remote, remoteAtMs: 1000, nowMs: 30000 });
+    expect(s.predictions.find((x) => x.turbineId === "GT-08")!.by).toBe("Decision tree");
+  });
+});

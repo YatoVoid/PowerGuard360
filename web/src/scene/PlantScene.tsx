@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
@@ -293,13 +293,13 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
             <meshBasicMaterial color={FLOW} />
           </mesh>
         )}
-        <Html position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
+        <Tag position={[0, 44, -9]} center distanceFactor={160} zIndexRange={[10, 0]}>
           <Label id={tb.id} className={`tag-${tb.status}`}>
             <strong>{tb.id}</strong>
             <span>{tb.status === "tripped" || tb.status === "offline" ? tb.status : `${tb.outputMw.toFixed(0)} MW`}</span>
             {tb.id === LIVE_SENSOR_UNIT && <em className={`tag-live ${tb.source === "live" ? "is-on" : ""}`}>{tb.source === "live" ? "live sensors" : "sensors offline"}</em>}
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
@@ -463,9 +463,9 @@ function AirCooledCondenser() {
           <meshStandardMaterial map={wallTex} roughness={0.7} />
         </mesh>
       ))}
-      <Html position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
+      <Tag position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
         <Label id="acc" className="tag-muted"><strong>Air-cooled condenser</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -498,9 +498,9 @@ function GasSupply() {
       </mesh>
       {/* metering station where the pipeline enters */}
       <Merged boxes={GAS_BOXES} />
-      <Html position={[118, 9, -34]} center zIndexRange={[10, 0]}>
+      <Tag position={[118, 9, -34]} center zIndexRange={[10, 0]}>
         <Label id="gas" className="tag-muted"><strong>Gas metering</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -541,9 +541,9 @@ function Switchyard() {
       </mesh>
       <Line points={fence} color="#6b6862" lineWidth={1} />
       <Merged boxes={SWITCHYARD_SPECS.boxes} beams={SWITCHYARD_SPECS.beams} cast />
-      <Html position={[x, 18, z]} center zIndexRange={[10, 0]}>
+      <Tag position={[x, 18, z]} center zIndexRange={[10, 0]}>
         <Label id="switchyard" className="tag-muted"><strong>Switchyard</strong></Label>
-      </Html>
+      </Tag>
     </group>
     </Selectable>
   );
@@ -639,12 +639,12 @@ function DataCenter() {
           <boxGeometry args={[3.6, 0.5, 0.2]} />
           <meshStandardMaterial color="#9fc3e6" emissive="#6fa8dc" emissiveIntensity={glow} toneMapped={false} />
         </instancedMesh>
-        <Html position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
+        <Tag position={[0, 24, 62]} center distanceFactor={170} zIndexRange={[10, 0]}>
           <Label id="datacenter" className="tag-dc">
             <strong>AI data center</strong>
             <span>{demand.toFixed(0)} MW load</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
@@ -666,12 +666,12 @@ function BatteryYard() {
             />
           </mesh>
         ))}
-        <Html position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
+        <Tag position={[0, 10, 0]} center distanceFactor={150} zIndexRange={[10, 0]}>
           <Label id="battery">
             <strong>Battery</strong>
             <span>{battery.socPct.toFixed(0)}%{discharging ? `, out ${battery.powerMw.toFixed(0)} MW` : ""}</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </Selectable>
   );
@@ -742,12 +742,12 @@ function EngineerFigure({ id }: { id: string }) {
             <Person vest={vest} walking={!!walking} phase={id.length} />
           </Selectable>
         </group>
-        <Html position={[0, 8, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
+        <Tag position={[0, 8, 0]} center distanceFactor={110} zIndexRange={[10, 0]}>
           <Label id={r?.asset ?? "control"} className={`tag-crew ${e.kind === "phone" ? "tag-phone" : ""}`}>
             <strong>{e.name}</strong>
             <span>{doing}</span>
           </Label>
-        </Html>
+        </Tag>
       </group>
     </>
   );
@@ -789,9 +789,9 @@ function RequestMarkers() {
 
 function ControlRoom() {
   return (
-    <Html position={[-120, 13, 72]} center zIndexRange={[10, 0]}>
+    <Tag position={[-120, 13, 72]} center zIndexRange={[10, 0]}>
       <Label id="control" className="tag-muted"><strong>Control room</strong></Label>
-    </Html>
+    </Tag>
   );
 }
 
@@ -849,13 +849,24 @@ function FrameCap({ fps }: { fps: number }) {
   return null;
 }
 
+// Labels mount into the same element the canvas takes events from. Left to drei's default, a label that
+// mounts before the canvas connects its events switches container afterwards, and React then throws on unmount.
+const LabelRoot = createContext<RefObject<HTMLDivElement>>({ current: null! });
+function Tag(props: ComponentProps<typeof Html>) {
+  return <Html portal={useContext(LabelRoot)} {...props} />;
+}
+
 export function PlantScene() {
+  const root = useRef<HTMLDivElement>(null!);
   const controls = useRef<OrbitControlsImpl>(null);
   const select = useStore((s) => s.select);
   // Fixed for the session: changing resolution mid-run reallocates every buffer and stalls for about a second.
   const dpr = Math.min(window.devicePixelRatio, 1.5);
   return (
+    <div ref={root} className="scene-root">
+    <LabelRoot.Provider value={root}>
     <Canvas
+      eventSource={root}
       shadows={{ type: THREE.PCFShadowMap }}
       dpr={dpr}
       frameloop="demand"
@@ -872,5 +883,7 @@ export function PlantScene() {
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
       <CameraRig controls={controls} />
     </Canvas>
+    </LabelRoot.Provider>
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 import { createPlant, step } from "../../web/src/sim/engine.ts";
-import type { PlantState, SensorReading, StepInputs } from "../../web/src/types.ts";
+import type { PlantState, RemotePrediction, SensorReading, StepInputs } from "../../web/src/types.ts";
 import type { Action } from "./protocol.ts";
 
 // Owns the one authoritative plant. Clients queue actions; each tick applies them and advances one second.
@@ -8,6 +8,8 @@ export class PlantHost {
   private inputs: Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "accept" | "walkM" | "autoWalk" | "startRepair" | "cancel">> = this.empty();
   private sensor: SensorReading | null = null;
   private sensorAtMs: number | undefined;
+  private remote: RemotePrediction | null = null;
+  private remoteAtMs: number | undefined;
 
   private empty() {
     return { tripRequests: [], resetRequests: [], newRequests: [], accept: [], walkM: [], autoWalk: [], startRepair: [], cancel: [] };
@@ -30,6 +32,11 @@ export class PlantHost {
   ingest(r: SensorReading, nowMs = Date.now()) {
     this.sensor = r;
     this.sensorAtMs = nowMs;
+  }
+
+  predict(p: RemotePrediction, nowMs = Date.now()) {
+    this.remote = p;
+    this.remoteAtMs = nowMs;
   }
 
   // Engineers whose phone is connected right now. Anyone else on the roster acts on their own,
@@ -58,7 +65,7 @@ export class PlantHost {
 
   tick(nowMs = Date.now()) {
     this.standIn();
-    this.plant = step(this.plant, { ...this.inputs, sensor: this.sensor, sensorAtMs: this.sensorAtMs, nowMs });
+    this.plant = step(this.plant, { ...this.inputs, sensor: this.sensor, sensorAtMs: this.sensorAtMs, remote: this.remote, remoteAtMs: this.remoteAtMs, nowMs });
     this.inputs = this.empty();
     this.sensor = null;
     return this.plant;

@@ -93,6 +93,9 @@ function localTick() {
 
 // Local pages talk to the plant server on the same machine; a deployed page needs VITE_WS_URL pointing at a wss:// server.
 function serverUrl() {
+  // ?ws=wss://host/ws points a deployed page at a tunnel without rebuilding it.
+  const override = new URLSearchParams(location.search).get("ws");
+  if (override && /^wss?:\/\/[^\s]+$/.test(override)) return override;
   const configured = import.meta.env.VITE_WS_URL as string | undefined;
   if (configured) return configured;
   if (location.protocol === "https:") return null;

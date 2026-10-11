@@ -2,10 +2,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PlantHost } from "./plant.ts";
-import { ClientMessage, SensorReading } from "./protocol.ts";
+import type { z } from "zod";
+import { ClientMessage, RemotePrediction, SensorReading } from "./protocol.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? "";
+const MODEL_TOKEN = process.env.MODEL_TOKEN ?? "";
 const MAX_BODY = 4 * 1024;
 const ACTIONS_PER_SECOND = 20;
 
@@ -16,38 +18,47 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function tokenOk(req: IncomingMessage) {
-  if (!DEVICE_TOKEN) return false;
+// Each sender has its own token, so a leaked one can be rotated without touching the other device.
+function tokenOk(req: IncomingMessage, token: string) {
+  if (!token) return false;
   const got = Buffer.from((req.headers.authorization ?? "").replace(/^Bearer /, ""));
-  const want = Buffer.from(DEVICE_TOKEN);
+  const want = Buffer.from(token);
   return got.length === want.length && timingSafeEqual(got, want);
+}
+
+function readJson(req: IncomingMessage, res: ServerResponse, done: (json: unknown) => void) {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => {
+    size += c.length;
+    if (size > MAX_BODY) { send(res, 413, { error: "too large" }); req.destroy(); return; }
+    chunks.push(c);
+  });
+  req.on("end", () => {
+    if (res.writableEnded) return;
+    let json: unknown;
+    try { json = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(res, 400, { error: "invalid JSON" }); }
+    done(json);
+  });
+}
+
+function post<T>(req: IncomingMessage, res: ServerResponse, name: string, token: string, schema: z.ZodType<T>, accept: (data: T) => void) {
+  if (!tokenOk(req, token)) {
+    console.warn(`[${name}] rejected request from ${req.socket.remoteAddress}: bad or missing token`);
+    return send(res, 401, { error: "unauthorized" });
+  }
+  readJson(req, res, (json) => {
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) return send(res, 400, { error: `invalid ${name}`, issues: parsed.error.issues.slice(0, 5) });
+    accept(parsed.data);
+    send(res, 200, { ok: true });
+  });
 }
 
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, t: host.plant.t });
-  if (req.method === "POST" && req.url === "/api/ingest") {
-    if (!tokenOk(req)) {
-      console.warn(`[ingest] rejected request from ${req.socket.remoteAddress}: bad or missing token`);
-      return send(res, 401, { error: "unauthorized" });
-    }
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => {
-      size += c.length;
-      if (size > MAX_BODY) { send(res, 413, { error: "too large" }); req.destroy(); return; }
-      chunks.push(c);
-    });
-    req.on("end", () => {
-      if (res.writableEnded) return;
-      let json: unknown;
-      try { json = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return send(res, 400, { error: "invalid JSON" }); }
-      const parsed = SensorReading.safeParse(json);
-      if (!parsed.success) return send(res, 400, { error: "invalid reading", issues: parsed.error.issues.slice(0, 5) });
-      host.ingest(parsed.data);
-      send(res, 200, { ok: true });
-    });
-    return;
-  }
+  if (req.method === "POST" && req.url === "/api/ingest") return post(req, res, "ingest", DEVICE_TOKEN, SensorReading, (r) => host.ingest(r));
+  if (req.method === "POST" && req.url === "/api/prediction") return post(req, res, "prediction", MODEL_TOKEN, RemotePrediction, (p) => host.predict(p));
   send(res, 404, { error: "not found" });
 });
 
@@ -105,4 +116,5 @@ setInterval(() => {
 server.listen(PORT, () => {
   console.log(`Power Guard 360 plant server on :${PORT}`);
   if (!DEVICE_TOKEN) console.warn("DEVICE_TOKEN is not set, so /api/ingest rejects every reading. Set it to accept the sensor board.");
+  if (!MODEL_TOKEN) console.warn("MODEL_TOKEN is not set, so /api/prediction rejects every forecast. Set it to accept the ML laptop.");
 });

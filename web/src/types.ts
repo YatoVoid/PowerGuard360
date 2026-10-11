@@ -52,6 +52,18 @@ export interface Prediction {
   minutesToFailure: number | null;
   risk: number;
   detail: string;
+  // Which model produced it: the on-board decision tree, or the name the ML laptop posts.
+  by: string;
+}
+
+// What the ML laptop posts after scoring the sensor board's readings.
+export interface RemotePrediction {
+  unit: string;
+  probability: number;
+  mode?: FailureMode | null;
+  minutes_to_failure?: number | null;
+  detail?: string;
+  model?: string;
 }
 
 export type Severity = "info" | "watch" | "trip";
@@ -108,6 +120,8 @@ export interface SensorReading {
 export interface StepInputs {
   sensor?: SensorReading | null;
   sensorAtMs?: number;
+  remote?: RemotePrediction | null;
+  remoteAtMs?: number;
   nowMs?: number;
   tripRequests?: string[];
   resetRequests?: string[];

@@ -45,7 +45,7 @@ function Sidebar() {
             <span>{board === "live" ? "Connected" : "Not connected"}</span>
           </div>
         </div>
-        <p className="side-note">Plant data is simulated until the turbine feed is connected.</p>
+        <p className="side-note">GT-01 to GT-07 replay the AI4I 2020 dataset. GT-08 replays it too until the board connects.</p>
       </div>
     </aside>
   );

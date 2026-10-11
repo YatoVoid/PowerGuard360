@@ -189,7 +189,7 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
       </div>
       {pred && pred.risk >= 0.2 && <p className="forecast">{pred.detail}</p>}
       {pred && (
-        <p className="note">Model: {Math.round(pred.probability * 100)}% failure probability on this reading.</p>
+        <p className="note">{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</p>
       )}
       <div className="actions">
         {canTrip && <button type="button" className="btn btn-danger" onClick={() => trip(tb.id)}>Trip {tb.id}</button>}
@@ -365,7 +365,7 @@ export function TurbineStrip() {
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
   return (
-    <ul className="strip" aria-label="Turbine fleet">
+    <div className="strip-wrap"><ul className="strip" aria-label="Turbine fleet">
       {turbines.map((tb) => (
         <li key={tb.id}>
           <button
@@ -381,7 +381,7 @@ export function TurbineStrip() {
           </button>
         </li>
       ))}
-    </ul>
+    </ul></div>
   );
 }
 
@@ -399,7 +399,7 @@ export function PredictionList() {
             <li key={p.turbineId}>
               <button type="button" onClick={() => select(p.turbineId)}>
                 <strong>{p.turbineId}</strong>
-                <span>{p.mode ? `${FAILURE_NAME[p.mode]}${p.minutesToFailure !== null ? ` in ~${fmt(p.minutesToFailure, 1)} min` : ""}` : `${Math.round(p.probability * 100)}% failure probability`}</span>
+                <span>{p.mode ? `${FAILURE_NAME[p.mode]}${p.minutesToFailure !== null ? ` in ~${fmt(p.minutesToFailure, 1)} min` : ""}` : `${Math.round(p.probability * 100)}% failure probability`}{p.by !== "Decision tree" && ` (${p.by})`}</span>
                 <meter min={0} max={1} low={0.3} high={0.6} optimum={0} value={p.risk} aria-label={`Risk ${Math.round(p.risk * 100)}%`} />
               </button>
             </li>

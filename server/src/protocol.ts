@@ -39,3 +39,15 @@ export const SensorReading = z.object({
   }),
 });
 export type SensorReading = z.infer<typeof SensorReading>;
+
+// What the ML laptop posts after scoring the board's readings. It overrides the decision tree for that unit.
+const printable = /^[^\u0000-\u001f\u007f<>]*$/;
+export const RemotePrediction = z.object({
+  unit: asset.refine((a) => a.startsWith("GT-"), "unit must be a turbine"),
+  probability: z.number().min(0).max(1),
+  mode: z.enum(["TWF", "HDF", "PWF", "OSF", "RNF"]).nullable().optional(),
+  minutes_to_failure: z.number().min(0).max(1440).nullable().optional(),
+  detail: z.string().max(160).regex(printable).optional(),
+  model: z.string().max(40).regex(printable).optional(),
+});
+export type RemotePrediction = z.infer<typeof RemotePrediction>;

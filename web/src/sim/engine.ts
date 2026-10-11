@@ -1,5 +1,5 @@
 import type {
-  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Severity, StepInputs, Turbine,
+  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, RemotePrediction, Severity, StepInputs, Turbine,
 } from "../types";
 import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
 import {
@@ -18,6 +18,8 @@ const HISTORY_LEN = 300;
 const RISK_HISTORY_LEN = 180;
 const EVENT_LEN = 60;
 const SENSOR_STALE_MS = 5000;
+// The ML laptop's forecast replaces the tree's for its unit while it keeps posting.
+const REMOTE_STALE_MS = 15000;
 // Raise a P3 request when a failure is forecast within this many minutes.
 export const REQUEST_LEAD_MIN = 2;
 export const WATCH_RISK = 0.5;
@@ -162,6 +164,22 @@ export function forecast(id: string, f: Features, wearPerRow = WEAR_PER_ROW): Pr
     minutesToFailure: soonest?.min ?? null,
     risk: Math.round(risk * 100) / 100,
     detail: lead ? lead.detail : `Model gives ${Math.round(probability * 100)}% failure probability on the current reading`,
+    by: "Decision tree",
+  };
+}
+
+function fromRemote(r: RemotePrediction): Prediction {
+  const minutes = r.minutes_to_failure ?? null;
+  const by = r.model || "ML laptop";
+  const when = minutes === null ? "" : ` in about ${fmtMin(minutes)}`;
+  return {
+    turbineId: r.unit,
+    probability: r.probability,
+    mode: r.mode ?? null,
+    minutesToFailure: minutes,
+    risk: Math.round(r.probability * 100) / 100,
+    detail: r.detail || (r.mode ? `${by} forecasts ${FAILURE_NAME[r.mode].toLowerCase()}${when}` : `${by} gives ${Math.round(r.probability * 100)}% failure probability${when}`),
+    by,
   };
 }
 
@@ -281,7 +299,10 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
 
   const predictions: Prediction[] = turbines
     .filter((x) => x.status !== "tripped" && x.status !== "offline")
-    .map((x) => forecast(x.id, x.features, wearRate[x.id]))
+    .map((x) => {
+      const remoteFresh = inputs.remote && inputs.remoteAtMs !== undefined && (inputs.nowMs ?? 0) - inputs.remoteAtMs < REMOTE_STALE_MS;
+      return remoteFresh && inputs.remote!.unit === x.id ? fromRemote(inputs.remote!) : forecast(x.id, x.features, wearRate[x.id]);
+    })
     .sort((a, b) => b.risk - a.risk);
 
   for (const tb of turbines) {

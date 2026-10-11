@@ -252,7 +252,7 @@ export function TurbineDetail() {
         <Spark values={plant.riskHistory[tb.id] ?? []} />
       </View>
       {pred && pred.risk >= 0.2 && <Text style={st.forecast}>{pred.detail}</Text>}
-      {pred && <Text style={[st.small, { marginTop: 6 }]}>Model: {Math.round(pred.probability * 100)}% failure probability on this reading.</Text>}
+      {pred && <Text style={[st.small, { marginTop: 6 }]}>{pred.by}: {Math.round(pred.probability * 100)}% failure probability on this reading.</Text>}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
         {(tb.status === 'running' || tb.status === 'watch') && (
           <Btn

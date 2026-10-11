@@ -172,8 +172,11 @@ h1, h2, h3, h4 { margin: 0; }
 
 /* turbine strip */
 .strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.strip-wrap { container-type: inline-size; }
+/* Below this width "wear 134 min" no longer fits eight across. */
+@container (max-width: 780px) { .strip { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .unit {
-  width: 100%; display: grid; gap: 2px; text-align: left; padding: 9px 11px 10px; cursor: pointer;
+  width: 100%; min-width: 0; display: grid; gap: 2px; text-align: left; padding: 9px 9px 10px; cursor: pointer;
   background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-s);
 }
 .unit:hover { border-color: var(--rule-2); }
@@ -181,7 +184,7 @@ h1, h2, h3, h4 { margin: 0; }
 .unit-id { font-weight: 600; font-size: 12px; color: var(--ink-2); }
 .unit-mw { font-size: 19px; font-weight: 500; }
 .unit-mw small { font-size: 11px; font-weight: 400; color: var(--ink-3); }
-.unit-meta { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.unit-meta { font-size: 11.5px; letter-spacing: -0.01em; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .unit-bar { height: 3px; background: var(--surface-3); margin-top: 6px; overflow: hidden; border-radius: 2px; }
 .unit-bar span { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform 0.8s linear; }
 .unit-watch { background: var(--watch-bg); border-color: #f0d58a; }
@@ -301,7 +304,8 @@ h1, h2, h3, h4 { margin: 0; }
 }
 .d-kpis { grid-area: kpi; }
 .d-balance { grid-area: bal; }
-.d-alarms { grid-area: alm; overflow-y: auto; max-height: 520px; }
+/* Sized by the panels beside it, not by how many events there are; the list scrolls inside. */
+.d-alarms { grid-area: alm; overflow-y: auto; contain: size; min-height: 320px; }
 .d-load { grid-area: load; align-self: start; }
 .d-fleet { grid-area: fleet; }
 .d-detail { grid-area: det; align-self: start; }
@@ -421,6 +425,7 @@ h1, h2, h3, h4 { margin: 0; }
   .hint-touch { display: inline; }
   .chart-box { height: 180px; }
   .dash { grid-template-columns: minmax(0, 1fr); grid-template-areas: "kpi" "maint" "bal" "fleet" "det" "alm" "load" "pred" "sen"; height: auto; overflow: visible; padding: var(--gap) var(--gutter); }
+  .d-alarms { contain: none; max-height: 420px; }
   .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .map-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: 46vh auto; height: auto; }
   .map-side { border-left: 0; padding: var(--gap) var(--gutter); }
@@ -526,3 +531,5 @@ h1, h2, h3, h4 { margin: 0; }
 .loadbar-val { font-weight: 600; }
 .kv dd { font-weight: 600; }
 @media (max-width: 720px) { .stats dd { font-size: 20px; } }
+
+.scene-root { position: relative; width: 100%; height: 100%; overflow: hidden; }
