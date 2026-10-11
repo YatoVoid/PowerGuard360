@@ -85,6 +85,7 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
   useEffect(() => { if (job.status !== 'en-route') stopShake(); }, [job.status, stopShake]);
   const me = useStore((s) => s.plant.engineers.find((e) => e.id === ME));
   const leftM = (1 - job.progress) * pathLength(job.path);
+  const gas = useStore((s) => s.plant.gas);
   return (
     <Panel title="Your job" aside={<Prio p={job.priority} />}>
       <View style={st.detailHead}>
@@ -95,7 +96,8 @@ function JobCard({ job }: { job: MaintenanceRequest }) {
         <Text style={styles.checkLabel}>What to check</Text>
         <Text style={st.body}>{job.reason}</Text>
       </View>
-      {job.basis && <Text style={[st.small, { marginBottom: 12 }]}>Why the model flagged it: {job.basis.detail}</Text>}
+      {job.basis && <Text style={[st.small, { marginBottom: 12 }]}>Why it was flagged: {job.basis.detail}</Text>}
+      {job.asset === 'gas' && gas.connected && <KV label="Air quality now" value={`${gas.qualityPct}% of clean air`} watch={gas.level !== 'good'} />}
       <Text style={styles.status}>{STATUS[job.status]}</Text>
 
       {job.status === 'dispatched' && (

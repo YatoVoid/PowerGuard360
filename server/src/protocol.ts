@@ -27,7 +27,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hello"), role: z.literal("phone"), engineerId: id }),
 ]);
 
-// Same shape firmware/README.md documents: the six AI4I features, measured by the board for GT-08.
+// Same shape firmware/README.md documents: the six AI4I features for GT-08, plus air quality at gas metering.
 // Ranges are the physical bounds of each reading, wide enough for real sensors and the dataset alike.
 export const SensorReading = z.object({
   device: z.string().max(40),
@@ -40,12 +40,14 @@ export const SensorReading = z.object({
     rpm: z.number().min(0).max(5000).optional(),
     torque_nm: z.number().min(0).max(200).optional(),
     tool_wear_min: z.number().min(0).max(500).optional(),
+    // Air quality sensor at the gas metering skid, raw 14-bit ADC count (higher = more gas or fumes).
+    air_quality_raw: z.number().min(0).max(16383).optional(),
   }),
 });
 export type SensorReading = z.infer<typeof SensorReading>;
 
 const RANGES: Record<string, [number, number]> = {
-  air_temp_k: [250, 350], process_temp_k: [250, 400], rpm: [0, 5000], torque_nm: [0, 200], tool_wear_min: [0, 500],
+  air_temp_k: [250, 350], process_temp_k: [250, 400], rpm: [0, 5000], torque_nm: [0, 200], tool_wear_min: [0, 500], air_quality_raw: [0, 16383],
 };
 
 // A glitching sensor shouldn't cost the whole post: drop just the reading that's out of range or not a number.

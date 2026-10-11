@@ -13,6 +13,7 @@ The board is GT-08's sensor package. The other seven turbines replay the AI4I 20
 | `rpm` | rpm | 1,170 to 2,890 | Hall sensor or IR tachometer on the spinning part |
 | `torque_nm` | newton metres | 4 to 77 | motor current mapped to torque |
 | `tool_wear_min` | minutes | 0 to 250 | minutes the "tool" has run since its last change |
+| `air_quality_raw` | ADC count, 0 to 16,383 | about 1,600 in clean air | Grove Air Quality Sensor v1.3 on A0, at the gas metering skid. Not a turbine reading: it drives the gas metering asset. Leave it out for the first 20 s while the sensor warms up. |
 
 ```
 POST <SERVER_URL>/api/ingest
@@ -29,7 +30,8 @@ Content-Type: application/json
     "process_temp_k": 309.6,
     "rpm": 1480,
     "torque_nm": 43.2,
-    "tool_wear_min": 12
+    "tool_wear_min": 12,
+    "air_quality_raw": 1610
   }
 }
 ```
@@ -41,6 +43,7 @@ Content-Type: application/json
   - Heat dissipation: process minus air temperature below 8.6 K while speed is under 1,380 rpm.
   - Power: torque × speed (rad/s) outside 3,500 to 9,000 W.
 - The server rejects readings outside the physical ranges in `server/src/protocol.ts`.
+- Air quality: the first readings after the sensor connects are taken as clean air. Gas, fumes or a breath push the count up; below 70% of clean air the manager gets a "possible gas leak" recommendation for gas metering.
 
 ## Secrets
 Wi-Fi password, `SERVER_URL` and `DEVICE_TOKEN` go in `secrets.h`, which git ignores. Commit `secrets.example.h` with blank values instead.
@@ -52,6 +55,7 @@ Wi-Fi password, `SERVER_URL` and `DEVICE_TOKEN` go in `secrets.h`, which git ign
 cd server
 npm run board                                        # steady readings
 npm run board -- HDF                                 # 40 s lead-in to a recorded heat dissipation failure (also OSF, PWF, TWF)
+npm run board -- GAS                                 # gas metering air quality drops 20 s in, for 15 s
 ML_URL=http://<ml-laptop>:<port>/<path> npm run board -- OSF   # also send each reading to the ML laptop
 ```
 

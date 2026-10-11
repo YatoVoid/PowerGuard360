@@ -116,6 +116,7 @@ export interface PlantState {
   turbines: Turbine[];
   battery: Battery;
   board: Board;
+  gas: GasMetering;
   engineers: Engineer[];
   requests: MaintenanceRequest[];
   recommendations: Recommendation[];
@@ -137,7 +138,24 @@ export interface SensorReading {
     rpm?: number;
     torque_nm?: number;
     tool_wear_min?: number;
+    air_quality_raw?: number;
   };
+}
+
+// Air quality sensor at the gas metering skid. A leak (or a breath on the sensor) pushes the reading up.
+export interface GasMetering {
+  connected: boolean;
+  lastSeenMs: number | null;
+  // Sensor ADC count; higher means more gas or fumes in the air.
+  raw: number | null;
+  // Clean-air level, learned from the first readings and tracked down slowly.
+  baseline: number | null;
+  samples: number;
+  // 100 = clean air. baseline / raw, so a reading 50% above clean air is 67%.
+  qualityPct: number | null;
+  level: "good" | "reduced" | "poor" | null;
+  // Quality %, one point a second for the last 3 minutes.
+  history: number[];
 }
 
 export interface StepInputs {

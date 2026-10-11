@@ -1,5 +1,5 @@
 import type {
-  Board, Engineer, Features, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Recommendation, RemotePrediction, Severity, StepInputs, Turbine,
+  Board, Engineer, Features, GasMetering, HistoryPoint, MaintenanceRequest, PlantEvent, PlantState, Prediction, Priority, Recommendation, RemotePrediction, Severity, StepInputs, Turbine,
 } from "../types";
 import { CONTROL_ROOM, assetLabel, pathLength, pointOnPath, routeFrom } from "./site";
 import {
@@ -165,6 +165,38 @@ function fmtMin(min: number) {
   return min < 1 ? `${Math.max(1, Math.round(min * 60))} s` : `${min.toFixed(1)} min`;
 }
 
+// Air quality at the gas metering skid. The first readings after the sensor connects set the clean-air
+// level; it then follows the air down quickly and up only slowly, so a leak can't teach it that gas is normal.
+export const GAS_REDUCED_PCT = 85;
+export const GAS_ALERT_PCT = 70;
+export const GAS_WARMUP_SAMPLES = 6;
+export const GAS_LEAK_CHECK = "Check the gas metering skid for leaks with a handheld detector: flanges, valve packings, meter seals and the pipeline inlet.";
+
+function applyGas(prev: GasMetering, inputs: StepInputs): GasMetering {
+  const now = inputs.nowMs ?? 0;
+  const raw = inputs.sensor?.readings.air_quality_raw;
+  const fresh = (at: number | null) => at !== null && now - at < SENSOR_STALE_MS;
+  if (raw === undefined || inputs.sensorAtMs === undefined) {
+    const connected = fresh(prev.lastSeenMs);
+    return { ...prev, connected, history: [...prev.history, connected ? prev.qualityPct ?? 100 : NaN].slice(-RISK_HISTORY_LEN) };
+  }
+  // A sensor coming back after a gap may have been moved or replaced, so it learns clean air again.
+  const restart = !fresh(prev.lastSeenMs);
+  const samples = restart ? 1 : prev.samples + 1;
+  const base = restart || prev.baseline === null ? raw
+    : samples <= GAS_WARMUP_SAMPLES ? prev.baseline + (raw - prev.baseline) / samples
+    : raw < prev.baseline ? prev.baseline + (raw - prev.baseline) * 0.2
+    : raw < prev.baseline * 1.1 ? prev.baseline + (raw - prev.baseline) * 0.02
+    : prev.baseline;
+  const qualityPct = Math.max(0, Math.min(100, Math.round((100 * base) / Math.max(raw, 1))));
+  const level = samples <= GAS_WARMUP_SAMPLES ? "good" : qualityPct < GAS_ALERT_PCT ? "poor" : qualityPct < GAS_REDUCED_PCT ? "reduced" : "good";
+  return {
+    connected: true, lastSeenMs: inputs.sensorAtMs, raw, baseline: base, samples,
+    qualityPct: samples <= GAS_WARMUP_SAMPLES ? 100 : qualityPct, level,
+    history: [...prev.history, samples <= GAS_WARMUP_SAMPLES ? 100 : qualityPct].slice(-RISK_HISTORY_LEN),
+  };
+}
+
 function applyBoard(prev: Board, inputs: StepInputs): Board {
   const now = inputs.nowMs ?? 0;
   const r = inputs.sensor?.readings;
@@ -192,6 +224,7 @@ export function createPlant(seed = 7): PlantState {
     turbines,
     battery: { socPct: 82, powerMw: 0, capacityMwh: 800, maxPowerMw: 400 },
     board: { source: "sim", lastSeenMs: null, features: null },
+    gas: { connected: false, lastSeenMs: null, raw: null, baseline: null, samples: 0, qualityPct: null, level: null, history: [] },
     engineers: initialEngineers(),
     requests: [],
     recommendations: [],
@@ -210,6 +243,9 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   const log = (severity: Severity, asset: string, text: string) => events.push({ id: nextEventId++, t, severity, asset, text });
 
   const board = applyBoard(prev.board, inputs);
+  const gas = applyGas(prev.gas, inputs);
+  if (gas.level === "poor" && prev.gas.level !== "poor") log("watch", "gas", `Air quality at gas metering down to ${gas.qualityPct}% of clean air`);
+  if (gas.level === "good" && prev.gas.level === "poor") log("info", "gas", `Air quality at gas metering back to ${gas.qualityPct}%`);
   const demandMw = demandAt(t, rnd);
   const turbines = prev.turbines.map((tb) => ({ ...tb }));
   const advanceRow = t % ROW_SECONDS === 0;
@@ -351,32 +387,49 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     rec.status = "requested"; rec.requestId = req.id;
   }
 
-  // The model flags a unit: recommend maintenance once, keep it current while it waits for the manager.
+  // Recommend maintenance once per asset and keep it current while it waits for the manager.
+  type RecFields = Omit<Recommendation, "id" | "asset" | "createdT" | "status" | "decidedT" | "requestId">;
+  const recommend = (asset: string, fields: RecFields) => {
+    if (openFor(asset) || recentlyFixed(asset)) return;
+    const pending = recommendations.find((r) => r.asset === asset && r.status === "pending");
+    if (pending) {
+      if (fields.risk >= pending.risk) Object.assign(pending, fields);
+      return;
+    }
+    const declinedT = Math.max(-Infinity, ...recommendations.filter((r) => r.asset === asset && r.status === "declined").map((r) => r.decidedT ?? 0));
+    if (t - declinedT < DECLINE_QUIET_S) return;
+    const rec: Recommendation = { id: `RC-${101 + recommendations.length}`, asset, createdT: t, ...fields, status: "pending", decidedT: null, requestId: null };
+    recommendations.push(rec);
+    log("watch", asset, `${rec.id} maintenance recommended for ${assetLabel(asset)}: ${rec.detail}`);
+  };
+
   for (const tb of turbines) {
     const pred = predictions.find((p) => p.turbineId === tb.id);
     if (!pred || !(pred.ml ? pred.ml.failureClass === 1 : pred.risk >= WATCH_RISK)) continue;
-    if (openFor(tb.id) || recentlyFixed(tb.id)) continue;
-    const pending = recommendations.find((r) => r.asset === tb.id && r.status === "pending");
-    const declinedT = Math.max(-Infinity, ...recommendations.filter((r) => r.asset === tb.id && r.status === "declined").map((r) => r.decidedT ?? 0));
-    if (!pending && t - declinedT < DECLINE_QUIET_S) continue;
     const ml = pred.ml;
-    const fields = {
+    recommend(tb.id, {
       updatedT: t,
       risk: pred.risk,
-      alertLevel: ml?.alertLevel ?? (pred.risk >= 0.8 ? "Critical" as const : "Alert" as const),
+      alertLevel: ml?.alertLevel ?? (pred.risk >= 0.8 ? "Critical" : "Alert"),
       detail: pred.detail,
       by: pred.by,
       types: ml ? ml.types : pred.mode ? [{ code: pred.mode, name: FAILURE_NAME[pred.mode], probability: pred.risk }] : [],
       factors: ml?.factors ?? null,
       action: ml?.action ?? (pred.mode && FAILURE_ACTION[pred.mode]) ?? GENERAL_ACTION,
-    };
-    if (pending) {
-      if (pred.risk >= pending.risk) Object.assign(pending, fields);
-      continue;
-    }
-    const rec: Recommendation = { id: `RC-${101 + recommendations.length}`, asset: tb.id, createdT: t, ...fields, status: "pending", decidedT: null, requestId: null };
-    recommendations.push(rec);
-    log("watch", tb.id, `${rec.id} maintenance recommended for ${tb.id}: ${rec.detail}`);
+    });
+  }
+
+  if (gas.connected && gas.level === "poor" && gas.qualityPct !== null) {
+    recommend("gas", {
+      updatedT: t,
+      risk: Math.round((1 - gas.qualityPct / 100) * 100) / 100,
+      alertLevel: gas.qualityPct < 50 ? "Critical" : "Alert",
+      detail: `Air quality at the gas metering skid fell to ${gas.qualityPct}% of clean air: possible gas leak`,
+      by: "Air quality sensor",
+      types: [],
+      factors: null,
+      action: GAS_LEAK_CHECK,
+    });
   }
 
   for (const id of inputs.cancel ?? []) {
@@ -475,6 +528,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     turbines,
     battery,
     board,
+    gas,
     engineers,
     requests,
     recommendations: recommendations.slice(-RECOMMENDATION_LEN),

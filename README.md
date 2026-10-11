@@ -74,7 +74,7 @@ The plant server prints `[ml] scoring every turbine with Random Forest` once it 
 
 For the demo, use `-- PWF` or `-- OSF`: the model flags every recorded power and overstrain failure. The `-- HDF` row is one of the 5 heat failures out of 115 it misses (46% risk), and it misses most tool wear failures (see `machine_learning/README.md`).
 
-The board simulator sends real AI4I rows once a second in the board's format. `npm run board` gives steady readings; `-- HDF`, `-- OSF`, `-- PWF` or `-- TWF` plays 40 rows leading into a recorded failure, which the model should flag as a recommendation for GT-08. To also send each reading to the ML laptop:
+The board simulator sends real AI4I rows once a second in the board's format. `npm run board` gives steady readings with clean air at gas metering; `-- GAS` drops the air quality 20 s in to show a leak; `-- HDF`, `-- OSF`, `-- PWF` or `-- TWF` plays 40 rows leading into a recorded failure, which the model should flag as a recommendation for GT-08. To also send each reading to the ML laptop:
 
 ```
 ML_URL=http://<ml-ip>:<port>/<path> npm run board -- HDF
@@ -152,10 +152,12 @@ Sketch for the **Arduino UNO R4 WiFi** (the R4 Minima has no Wi-Fi). In the Ardu
 //   I2C -> Grove Barometer (SPA06-003): air temperature
 //   A2  <- R280 motor spun by hand (generator): lead 1 -> 10k -> A2 (Grove yellow), lead 2 -> GND (black)
 //   A3  <- torque (HAS_TORQUE 1): lead 1 -> load switch -> 10 ohm -> GND; top of the 10 ohm -> 10k -> A3 (white)
+//   A0  <- Grove Air Quality Sensor v1.3 at the gas metering skid (higher reading = more gas or fumes)
 //
 // Every 500 ms prints this line and POSTs it to http://SERVER_HOST:SERVER_PORT/api/ingest:
 //   {"device":"plant-sensor-1","seq":42,"uptime_ms":42013,"readings":{"type":"M","air_temp_k":298.6,
-//    "process_temp_k":308.9,"rpm":1480,"torque_nm":43.2,"tool_wear_min":12}}
+//    "process_temp_k":308.9,"rpm":1480,"torque_nm":43.2,"tool_wear_min":12,"air_quality_raw":1610}}
+// air_quality_raw is left out for the first 20 s while the sensor's heater warms up.
 // Libraries: "Seeed Arduino SPA06". WiFi and server details: secrets.h.
 
 #include <Wire.h>
@@ -173,6 +175,8 @@ const unsigned long WIFI_RETRY_MS = 30000;   // rejoining blocks briefly, so not
 // Hand-spun R280 as a generator: its voltage is proportional to speed.
 const uint8_t PIN_GEN = A2;
 const uint8_t PIN_LOAD = A3;
+const uint8_t PIN_AIR = A0;
+const unsigned long AIR_WARMUP_MS = 20000;   // the air quality sensor reads high until its heater settles
 const float ADC_TO_V = 5.0f / 16383.0f;      // 14-bit ADC, 5 V reference
 const float RPM_PER_VOLT = 1667;             // R280: ~10000 rpm at 6 V
 const float NOISE_V = 0.015;                 // below this the shaft counts as stopped
@@ -200,7 +204,7 @@ float airBaseK = NAN;
 unsigned long seq = 0;
 float toolWearMin = 0;
 unsigned long lastSend = 0, lastSample = 0, lastWifiTry = 0, pausedUntil = 0;
-float sumGenV = 0, sumLoadV = 0;
+float sumGenV = 0, sumLoadV = 0, sumAir = 0;
 int nSamples = 0;
 
 void ensureWifi() {
@@ -297,6 +301,7 @@ void loop() {
 #if HAS_TORQUE
     sumLoadV += analogRead(PIN_LOAD) * ADC_TO_V;
 #endif
+    sumAir += analogRead(PIN_AIR);
     nSamples++;
   }
 
@@ -306,7 +311,8 @@ void loop() {
 
   float genV = nSamples ? sumGenV / nSamples : 0;
   float loadV = nSamples ? sumLoadV / nSamples : 0;
-  sumGenV = sumLoadV = 0;
+  float airRaw = nSamples ? sumAir / nSamples : 0;
+  sumGenV = sumLoadV = sumAir = 0;
   nSamples = 0;
   // Under load the winding drops some voltage; adding it back gives the true speed.
   float currentA = loadV / R_LOAD;
@@ -334,7 +340,8 @@ void loop() {
     ",\"process_temp_k\":" + String(processK, 1) +
     ",\"rpm\":" + String(rpm, 0) +
     ",\"torque_nm\":" + String(torqueNm, 1) +
-    ",\"tool_wear_min\":" + String(toolWearMin, 0) + "}}";
+    ",\"tool_wear_min\":" + String(toolWearMin, 0) +
+    (millis() > AIR_WARMUP_MS ? String(",\"air_quality_raw\":") + String(airRaw, 0) : String("")) + "}}";
   Serial.println(body);
 
   ensureWifi();
@@ -363,6 +370,8 @@ void loop() {
 Open Serial Monitor at 115200 baud: it stays quiet while posts succeed and prints the reply code and the body when one fails (401 wrong token, 400 bad body, 0 no reply). If the ML laptop needs the readings too, give it its own `WiFiClient` and repeat the post to its address.
 
 To see exactly what the board sends, start the server with `LOG_INGEST=1 npx tsx --env-file=.env src/server.ts`. Every post is printed, and rejected ones say which field was wrong.
+
+**Air quality at gas metering.** Plug the Grove Air Quality Sensor v1.3 into A0. After its 20 s warm-up the board adds `air_quality_raw` to every post. The server takes the first few seconds of readings as clean air and shows the rest as a percentage of it on the gas metering asset. Below 70% the manager gets a "possible gas leak" maintenance recommendation. For the presentation: let it settle in normal air, then cup your hands over the sensor and breathe into it. The reading climbs, quality drops and the recommendation appears within a couple of seconds. Without the board, `npm run board -- GAS` plays the same drop. If breathing doesn't bring it under 70%, lower `GAS_ALERT_PCT` in `web/src/sim/engine.ts`.
 
 The board doesn't have to send all six readings. Whatever it sends drives GT-08 live (marked "Live" on the website); anything it leaves out keeps replaying from the dataset.
 

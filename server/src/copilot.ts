@@ -2,7 +2,7 @@ import { z } from "zod";
 import { FAILURE_NAME, OSF_LIMIT, modelNote, PWF_MAX_W, PWF_MIN_W, HDF_GAP_K, HDF_RPM } from "../../web/src/sim/model.ts";
 import { assetLabel } from "../../web/src/sim/site.ts";
 import type { MlDiagnosis, PlantState, Turbine } from "../../web/src/types.ts";
-import { WATCH_RISK } from "../../web/src/sim/engine.ts";
+import { GAS_ALERT_PCT, WATCH_RISK } from "../../web/src/sim/engine.ts";
 
 // The newest Flash is often briefly overloaded; the stable alias takes over so the manager still gets an answer.
 const MODELS = [process.env.GEMINI_MODEL ?? "gemini-3.8-flash", "gemini-flash-latest", "gemini-flash-lite-latest"];
@@ -147,6 +147,14 @@ export function plantContext(p: PlantState, focus?: string | null) {
         engineer: engineerName(r.engineerId),
         eta_min: r.status === "resolved" ? null : r1(r.etaMin),
       })),
+    gas_metering_air_quality: !p.gas.connected
+      ? "no air quality sensor connected"
+      : {
+          air_quality: `${p.gas.qualityPct}% of clean air`,
+          verdict: p.gas.level === "poor" ? "poor: possible gas leak, maintenance recommended"
+            : p.gas.level === "reduced" ? "reduced: watch it, no leak flagged yet" : "good: no leak indicated",
+          leak_alert_below: `${GAS_ALERT_PCT}%`,
+        },
     maintenance_recommendations: p.recommendations
       .filter((r) => r.status === "pending" || p.t - (r.decidedT ?? 0) < 600)
       .slice(-12)

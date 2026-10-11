@@ -85,6 +85,18 @@ describe("recommendations", () => {
   });
 });
 
+describe("air quality ingest", () => {
+  it("accepts the gas metering reading and drops an impossible one without losing the rest", () => {
+    expect(SensorReading.safeParse({ device: "b", seq: 1, uptime_ms: 1, readings: { rpm: 1500, air_quality_raw: 1610 } }).success).toBe(true);
+    const cleaned = dropBadReadings({ device: "b", seq: 1, uptime_ms: 1, readings: { rpm: 1500, air_quality_raw: 99999 } });
+    expect(cleaned.dropped).toEqual(["air_quality_raw=99999"]);
+    const h = new PlantHost();
+    h.ingest({ device: "b", seq: 1, uptime_ms: 1, readings: { air_quality_raw: 1610 } }, 1000);
+    h.tick(1000);
+    expect(h.plant.gas).toMatchObject({ connected: true, raw: 1610 });
+  });
+});
+
 describe("protocol", () => {
   it("rejects actions it does not know", () => {
     expect(ClientMessage.safeParse({ type: "action", action: { type: "explode" } }).success).toBe(false);

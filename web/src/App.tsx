@@ -20,6 +20,7 @@ function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const board = useStore((s) => s.plant.board.source);
+  const gas = useStore((s) => s.plant.gas);
   return (
     <aside className="side" aria-label="Main">
       <div className="side-brand">
@@ -43,6 +44,13 @@ function Sidebar() {
           <div>
             <strong>{LIVE_SENSOR_UNIT} sensor board</strong>
             <span>{board === "live" ? "Connected" : "Not connected"}</span>
+          </div>
+        </div>
+        <div className="side-status">
+          <span className={`dot ${gas.connected ? (gas.level === "poor" ? "dot-busy" : "dot-live") : ""}`} aria-hidden />
+          <div>
+            <strong>Gas metering air sensor</strong>
+            <span>{gas.connected ? `Air quality ${gas.qualityPct}%${gas.level === "poor" ? ", possible leak" : ""}` : "Not connected"}</span>
           </div>
         </div>
         <p className="side-note">GT-01 to GT-07 replay the AI4I 2020 dataset. GT-08 replays it too until the board connects.</p>
