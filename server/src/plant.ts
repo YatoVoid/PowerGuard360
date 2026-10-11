@@ -5,7 +5,7 @@ import type { Action } from "./protocol.ts";
 // Owns the one authoritative plant. Clients queue actions; each tick applies them and advances one second.
 export class PlantHost {
   plant: PlantState = createPlant();
-  private inputs: Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "accept" | "walkM" | "autoWalk" | "startRepair" | "cancel">> = this.empty();
+  private inputs: Required<Pick<StepInputs, "tripRequests" | "resetRequests" | "newRequests" | "dispatch" | "accept" | "walkM" | "autoWalk" | "startRepair" | "cancel">> = this.empty();
   private sensor: SensorReading | null = null;
   private sensorAtMs: number | undefined;
   private remote: RemotePrediction | null = null;
@@ -13,7 +13,7 @@ export class PlantHost {
   private service = new Map<string, { p: RemotePrediction; atMs: number }>();
 
   private empty() {
-    return { tripRequests: [], resetRequests: [], newRequests: [], accept: [], walkM: [], autoWalk: [], startRepair: [], cancel: [] };
+    return { tripRequests: [], resetRequests: [], newRequests: [], dispatch: [], accept: [], walkM: [], autoWalk: [], startRepair: [], cancel: [] };
   }
 
   apply(a: Action) {
@@ -23,6 +23,7 @@ export class PlantHost {
       case "reset": q.resetRequests.push(a.unit); break;
       case "request": q.newRequests.push({ asset: a.asset, reason: a.reason }); break;
       case "cancel": q.cancel.push(a.requestId); break;
+      case "dispatch": q.dispatch.push({ requestId: a.requestId, engineerId: a.engineerId }); break;
       case "accept": q.accept.push({ requestId: a.requestId, engineerId: a.engineerId }); break;
       case "walk": q.walkM.push({ engineerId: a.engineerId, meters: a.meters }); break;
       case "autoWalk": q.autoWalk.push({ engineerId: a.engineerId, on: a.on }); break;

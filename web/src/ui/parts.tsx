@@ -3,7 +3,7 @@ import { useStore } from "../store";
 import { LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
 import { FAILURE_NAME, modelNote } from "../sim/model";
 import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Source, Turbine } from "../types";
-import { assetLabel } from "../sim/site";
+import { assetLabel, pathLength, routeFrom } from "../sim/site";
 import { useCopilot } from "../copilot";
 
 export const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -291,6 +291,30 @@ export function PriorityChip({ p }: { p: MaintenanceRequest["priority"] }) {
   return <span className={`prio prio-${p.toLowerCase()}`}>{p}</span>;
 }
 
+// The manager picks who goes. Nearest free engineer is preselected; nothing is sent until Dispatch is pressed.
+export function DispatchControl({ r }: { r: MaintenanceRequest }) {
+  const engineers = useStore((s) => s.plant.engineers);
+  const act = useStore((s) => s.act);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const free = engineers
+    .filter((e) => e.status === "available")
+    .map((e) => ({ e, m: pathLength(routeFrom(e.pos, r.asset)) }))
+    .sort((a, b) => a.m - b.m);
+  if (!free.length) return <p className="note">Every engineer is busy. Dispatch once someone is free.</p>;
+  const pick = free.find((f) => f.e.id === chosen)?.e.id ?? free[0].e.id;
+  return (
+    <form className="dispatch" onSubmit={(ev) => { ev.preventDefault(); act({ type: "dispatch", requestId: r.id, engineerId: pick }); }}>
+      <label className="sr-only" htmlFor={`dispatch-${r.id}`}>Engineer for {r.id}</label>
+      <select id={`dispatch-${r.id}`} value={pick} onChange={(ev) => setChosen(ev.target.value)}>
+        {free.map(({ e, m }) => (
+          <option key={e.id} value={e.id}>{e.name}{e.kind === "phone" ? " (phone)" : ""}, {m < 5 ? "already there" : `${fmt(m)} m away`}</option>
+        ))}
+      </select>
+      <button type="submit" className="btn btn-primary">Dispatch</button>
+    </form>
+  );
+}
+
 function MaintenanceBox({ asset }: { asset: string }) {
   const req = useStore((s) => s.plant.requests.find((r) => r.asset === asset && r.status !== "resolved" && r.status !== "cancelled"));
   const engineer = useStore((s) => (req ? s.plant.engineers.find((e) => e.id === req.engineerId) : undefined));
@@ -312,6 +336,7 @@ function MaintenanceBox({ asset }: { asset: string }) {
             <div><dt>Engineer</dt><dd>{engineer?.name ?? "Not assigned"}</dd></div>
             {req.status !== "open" && <div><dt>Fixed in</dt><dd>{etaText(req.etaMin)}</dd></div>}
           </dl>
+          {req.status === "open" && <DispatchControl r={req} />}
           {req.status === "repairing" && (
             <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${1 - req.repairLeftS / REPAIR_S})` }} /></div>
           )}
@@ -324,7 +349,7 @@ function MaintenanceBox({ asset }: { asset: string }) {
         >
           <label htmlFor={`reason-${asset}`}>No open request for {assetLabel(asset)}.</label>
           <input id={`reason-${asset}`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What should the engineer check? (optional)" maxLength={200} />
-          <button type="submit" className="btn btn-primary">Request engineer</button>
+          <button type="submit" className="btn btn-primary">Raise request</button>
         </form>
       )}
     </div>

@@ -23,7 +23,7 @@ function Suggestion({ s }: { s: NonNullable<CopilotMessage["suggestion"]> }) {
     <div className="cp-suggest">
       <p><strong>Send an engineer to {name}?</strong> {s.reason}</p>
       <button type="button" className="btn btn-primary" disabled={open} onClick={() => act({ type: "request", asset: s.asset, reason: s.reason })}>
-        {open ? "Engineer requested" : "Request engineer"}
+        {open ? "Request raised" : "Raise request"}
       </button>
     </div>
   );

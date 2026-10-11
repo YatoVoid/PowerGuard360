@@ -26,6 +26,8 @@ describe("phone stand-in", () => {
     const h = new PlantHost();
     h.tick();
     h.apply({ type: "trip", unit: "GT-04" });
+    h.tick();
+    h.apply({ type: "dispatch", requestId: h.plant.requests[0].id, engineerId: "ENG-1" });
     for (let i = 0; i < 600 && !h.plant.requests.some((r) => r.status === "resolved"); i++) h.tick();
     expect(h.plant.requests[0].engineerId).toBe("ENG-1");
     expect(h.plant.requests[0].status).toBe("resolved");
@@ -36,6 +38,8 @@ describe("phone stand-in", () => {
     h.phonesOnline.add("ENG-1");
     h.tick();
     h.apply({ type: "trip", unit: "GT-04" });
+    h.tick();
+    h.apply({ type: "dispatch", requestId: h.plant.requests[0].id, engineerId: "ENG-1" });
     for (let i = 0; i < 30; i++) h.tick();
     expect(h.plant.requests[0].status).toBe("dispatched");
   });
@@ -48,6 +52,17 @@ describe("auto walk", () => {
     h.apply({ type: "autoWalk", engineerId: "ENG-1", on: true });
     for (let i = 0; i < 3; i++) h.tick();
     expect(h.plant.engineers[0].autoWalk).toBe(true);
+  });
+});
+
+describe("dispatch", () => {
+  it("leaves requests open until the manager dispatches one", () => {
+    const h = new PlantHost();
+    h.tick();
+    h.apply({ type: "trip", unit: "GT-04" });
+    for (let i = 0; i < 60; i++) h.tick();
+    expect(h.plant.requests[0].status).toBe("open");
+    expect(ClientMessage.safeParse({ type: "action", action: { type: "dispatch", requestId: "MR-101", engineerId: "ENG-2" } }).success).toBe(true);
   });
 });
 

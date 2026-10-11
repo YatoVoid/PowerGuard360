@@ -56,10 +56,38 @@ export function pointOnPath(path: XZ[], progress: number): XZ {
   return path[path.length - 1];
 }
 
-// Route from wherever an engineer is standing to an asset: back out to the service road first.
+export const ASSETS = [...Array.from({ length: 8 }, (_, i) => `GT-0${i + 1}`), "battery", "acc", "switchyard", "gas", "datacenter"];
+const ON_PATH_M = 2;
+
+// Where a point sits on a path, if it is within a couple of metres of it: the furthest segment along that passes by.
+function locate(path: XZ[], p: XZ, fromSeg: number): { seg: number; at: XZ } | null {
+  let found: { seg: number; at: XZ } | null = null;
+  for (let i = fromSeg; i < path.length - 1; i++) {
+    const [a, b] = [path[i], path[i + 1]];
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const len2 = dx * dx + dz * dz;
+    const f = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / len2));
+    const at: XZ = [a[0] + dx * f, a[1] + dz * f];
+    if (Math.hypot(p[0] - at[0], p[1] - at[1]) <= ON_PATH_M) found = { seg: i, at };
+  }
+  return found;
+}
+
+function tidy(path: XZ[]): XZ[] {
+  return path.filter((p, i) => i === 0 || Math.hypot(p[0] - path[i - 1][0], p[1] - path[i - 1][1]) > 0.01);
+}
+
+// Route from wherever an engineer is standing to an asset. Someone already on the way (or already there)
+// joins the asset's path where they are; anyone else walks back along the path they came in on to the
+// service road, then follows the road to the asset.
 export function routeFrom(from: XZ, asset: string): XZ[] {
   const target = assetPath(asset);
-  if (from[0] === CONTROL_ROOM[0] && from[1] === CONTROL_ROOM[1]) return target;
-  const exit: XZ[] = from[1] < ROAD_Z - 1 ? [[from[0] + 7, from[1]], [from[0] + 7, ROAD_Z]] : [[from[0], ROAD_Z]];
-  return [from, ...exit, ...target.slice(2)];
+  const onTarget = locate(target, from, 0);
+  if (onTarget) return tidy([from, onTarget.at, ...target.slice(onTarget.seg + 1)]);
+  for (const other of ASSETS) {
+    const path = assetPath(other);
+    const here = locate(path, from, 1);
+    if (here) return tidy([from, here.at, ...path.slice(2, here.seg + 1).reverse(), ...target.slice(2)]);
+  }
+  return tidy([from, [from[0], ROAD_Z], ...target.slice(2)]);
 }

@@ -373,7 +373,7 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
   if (batteryMw > 150 && prev.battery.powerMw <= 150) log("info", "Battery", `Battery covering ${batteryMw.toFixed(0)} MW`);
   const reserveMw = available.reduce((s, x) => s + x.capacityMw, 0) - outputMw + battery.maxPowerMw * (battery.socPct > 10 ? 1 : 0);
 
-  // Maintenance: raise requests from what the sensors show, dispatch engineers, walk, repair.
+  // Maintenance: raise requests from what the sensors show, send the engineers the manager picked, walk, repair.
   const engineers = prev.engineers.map((e) => ({ ...e }));
   const requests = prev.requests.map((r) => ({ ...r }));
   const active = (r: MaintenanceRequest) => r.status !== "resolved" && r.status !== "cancelled";
@@ -421,12 +421,11 @@ export function step(prev: PlantState, inputs: StepInputs = {}): PlantState {
     log("info", r.asset, `${r.id} cancelled by the control room`);
   }
 
-  // Most urgent first; the phone engineer gets first pick so the person carrying the app is in the loop.
-  const queue = requests.filter((r) => r.status === "open").sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdT - b.createdT);
-  for (const r of queue) {
-    const free = engineers.filter((e) => e.status === "available").sort((a, b) => (a.kind === "phone" ? -1 : 0) - (b.kind === "phone" ? -1 : 0));
-    const e = free[0];
-    if (!e) break;
+  // Only the manager sends an engineer; requests wait as open until then.
+  for (const d of inputs.dispatch ?? []) {
+    const r = requests.find((x) => x.id === d.requestId);
+    const e = engineers.find((x) => x.id === d.engineerId);
+    if (!r || !e || r.status !== "open" || e.status !== "available") continue;
     r.status = "dispatched"; r.engineerId = e.id; r.dispatchedT = t; r.path = routeFrom(e.pos, r.asset); r.progress = 0;
     e.status = "dispatched"; e.requestId = r.id;
     log("info", r.asset, `${r.id} dispatched to ${e.name}`);
