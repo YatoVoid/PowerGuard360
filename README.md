@@ -127,31 +127,61 @@ Sketch for the **Arduino UNO R4 WiFi** (the R4 Minima has no Wi-Fi). In the Ardu
 #include <WiFiS3.h>
 #include "secrets.h"
 
+// One connection is opened once and reused for every post. Opening a new one each
+// time takes the R4 seconds, and a failed connect can freeze the loop.
+WiFiClient client;
 unsigned long seq = 0;
 float toolWearMin = 0;
+unsigned long lastSend = 0;
 
-void connectWifi() {
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Joining Wi-Fi...");
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    delay(3000);
+void ensureWifi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  Serial.println("Joining Wi-Fi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) delay(200);
+}
+
+bool ensureServer() {
+  if (client.connected()) return true;
+  client.stop();
+  client.setConnectionTimeout(1500);
+  return client.connect(SERVER_HOST, SERVER_PORT);
+}
+
+// Reads the whole reply so the next post on the same connection starts clean. Returns the status code.
+int readReply() {
+  unsigned long start = millis();
+  int status = 0;
+  long length = 0;
+  while (millis() - start < 1500) {
+    if (!client.available()) { delay(2); continue; }
+    String line = client.readStringUntil('\n');
+    if (status == 0 && line.startsWith("HTTP/1.1 ")) status = line.substring(9, 12).toInt();
+    if (line.startsWith("Content-Length:") || line.startsWith("content-length:")) length = line.substring(15).toInt();
+    if (line == "\r") break;
   }
-  Serial.print("Connected, board IP ");
-  Serial.println(WiFi.localIP());
+  while (length > 0 && millis() - start < 1500) {
+    if (client.available()) { client.read(); length--; } else delay(2);
+  }
+  return status;
 }
 
 void setup() {
   Serial.begin(115200);
-  connectWifi();
+  ensureWifi();
 }
 
 void loop() {
-  // Replace with real sensor reads. Temperatures go in kelvin (Celsius + 273.15).
+  if (millis() - lastSend < 500) return;
+  lastSend = millis();
+
+  // Replace with real sensor reads. Temperatures in kelvin (Celsius + 273.15).
   float airK = 25.0 + 273.15;
   float processK = 35.5 + 273.15;
   float rpm = 1480;
   float torqueNm = 43.2;
-  toolWearMin += 1.0 / 60.0;
+  toolWearMin += 0.5 / 60.0;
 
   String body = String("{\"device\":\"plant-sensor-1\",\"seq\":") + seq++ +
     ",\"uptime_ms\":" + millis() +
@@ -161,36 +191,28 @@ void loop() {
     ",\"rpm\":" + String(rpm, 0) +
     ",\"torque_nm\":" + String(torqueNm, 1) +
     ",\"tool_wear_min\":" + String(toolWearMin, 0) + "}}";
-  Serial.println(body);
 
-  if (WiFi.status() != WL_CONNECTED) connectWifi();
+  ensureWifi();
+  if (!ensureServer()) { Serial.println("Server not reachable, will retry"); return; }
 
-  WiFiClient client;
-  client.setConnectionTimeout(2000);
-  if (client.connect(SERVER_HOST, SERVER_PORT)) {
-    client.println("POST /api/ingest HTTP/1.1");
-    client.print("Host: "); client.println(SERVER_HOST);
-    client.println("Content-Type: application/json");
-    client.print("Authorization: Bearer "); client.println(DEVICE_TOKEN);
-    client.print("Content-Length: "); client.println(body.length());
-    client.println("Connection: close");
-    client.println();
-    client.print(body);
+  client.print("POST /api/ingest HTTP/1.1\r\nHost: ");
+  client.print(SERVER_HOST);
+  client.print("\r\nContent-Type: application/json\r\nConnection: keep-alive\r\nAuthorization: Bearer ");
+  client.print(DEVICE_TOKEN);
+  client.print("\r\nContent-Length: ");
+  client.print(body.length());
+  client.print("\r\n\r\n");
+  client.print(body);
 
-    // First line of the reply, e.g. "HTTP/1.1 200 OK". 401 means a wrong token, 400 a reading out of range.
-    unsigned long start = millis();
-    while (!client.available() && millis() - start < 2000) delay(10);
-    if (client.available()) Serial.println(client.readStringUntil('\n'));
-    client.stop();
-  } else {
-    Serial.println("Can't reach the server. Check SERVER_HOST and that the server is running.");
+  int status = readReply();
+  if (status != 200) {
+    Serial.print("Reply "); Serial.print(status); Serial.print(" for "); Serial.println(body);
+    client.stop();   // start a fresh connection next time
   }
-
-  delay(1000);
 }
 ```
 
-Open Serial Monitor at 115200 baud: each second it prints the JSON and `HTTP/1.1 200 OK`. If the ML laptop needs the readings too, repeat the `client.connect(...)` block with its address and path.
+Open Serial Monitor at 115200 baud: it stays quiet while posts succeed and prints the reply code and the body when one fails (401 wrong token, 400 bad body, 0 no reply). If the ML laptop needs the readings too, give it its own `WiFiClient` and repeat the post to its address.
 
 To see exactly what the board sends, start the server with `LOG_INGEST=1 npx tsx --env-file=.env src/server.ts`. Every post is printed, and rejected ones say which field was wrong.
 

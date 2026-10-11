@@ -59,8 +59,10 @@ const ACTIONS_PER_SECOND = 20;
 const host = new PlantHost();
 
 function send(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  res.end(JSON.stringify(body));
+  const text = JSON.stringify(body);
+  // An explicit length lets small HTTP clients like the sensor board read one reply and reuse the connection.
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "content-length": Buffer.byteLength(text) });
+  res.end(text);
 }
 
 // Each sender has its own token, so a leaked one can be rotated without touching the other device.
