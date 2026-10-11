@@ -1,18 +1,82 @@
 # Power Guard 360
 
-Predictive maintenance for a gas turbine plant. A machine learning model watches every turbine's sensor data and tells the plant manager when a unit needs maintenance and why: the likely failure, the readings behind it and what to check. The manager declines it or requests maintenance with their own notes for the engineer, then dispatches someone. Nothing reaches an engineer until the manager does. The engineer gets the job on an Android app, walks to the asset by shaking the phone, and does the repair. Turbines don't actually fail in the demo; the recorded failures in the dataset are what the model has to see coming. Website and app stay in sync through the plant server.
+**Predictive maintenance for a gas turbine plant that powers an AI data center.** A machine learning model watches every turbine's sensor data and tells the plant manager when a unit needs maintenance, why, and what to check. The manager decides, dispatches an engineer, and the engineer's phone takes them to the job. A live Arduino sensor board drives one turbine and watches the gas metering skid for leaks.
 
-Two Random Forest models score every turbine once a second: one detects failures (calibrated risk, 78% recall at 96% precision on 2,000 unseen rows), the other names the failure type (heat dissipation, power, overstrain, tool wear). When the first one flags a unit, the maintenance board shows a recommendation with the risk, the possible failures, the three inputs that moved the risk most (SHAP) and the model's suggested check, prefilled as the manager's note.
+Built at CodeRED (University of Houston) for the Chevron track.
+
+[![Demo preview](docs/media/demo-preview.gif)](docs/media/demo.mp4)
+
+[Watch the 2-minute demo video](docs/media/demo.mp4). It was recorded on an earlier build where turbines tripped and engineers were sent automatically; the screenshots below show the current flow.
+
+| Maintenance recommendations | Gas leak alert |
+|---|---|
+| ![Maintenance board with a Random Forest recommendation for GT-08 and a gas leak recommendation](docs/media/maintenance.png) | ![Gas metering air quality at 52% with a possible gas leak recommendation](docs/media/gas-leak.png) |
+
+![Plant view with the 3D plant, live GT-08 readings and the model's diagnosis](docs/media/plant.png)
+
+## How it works
+
+```mermaid
+flowchart LR
+  board["Arduino UNO R4 WiFi<br/>GT-08 readings + gas air quality"] -->|"POST every 500 ms"| server
+  server["Plant server<br/>Node + TypeScript"] -->|"all turbines, every 1 s"| ml["ML service<br/>FastAPI + scikit-learn"]
+  ml -->|"risk, failure type, top reasons, check"| server
+  server <-->|"live state over WebSocket"| web["Website for the manager<br/>React + three.js"]
+  server <-->|"live state over WebSocket"| phone["App for the engineer<br/>Expo / React Native"]
+  server -->|"plant data + model verdicts"| gemini["Gemini copilot"]
+```
+
+1. **Sense.** The board turns a hand-spun motor, a barometer and an air quality sensor into the six readings of the AI4I 2020 dataset and posts them twice a second. GT-08 runs on them live; the other seven turbines replay real dataset rows.
+2. **Predict.** Every second the plant server sends all running turbines to the ML service. Model 1 (Random Forest, calibrated) gives the failure risk, Model 2 names the failure type, and SHAP gives the three readings that drove it.
+3. **Recommend.** When the model flags a turbine, or air quality at gas metering drops below 70% of clean air, the manager gets a recommendation with the reasons and a suggested check.
+4. **Decide.** The manager declines it, or requests maintenance with their own notes and dispatches a chosen engineer. Nothing reaches an engineer until then.
+5. **Fix.** The engineer's phone buzzes with the job. They accept, walk to the asset (shake the phone to walk), and the repair starts on arrival, all visible live on the 3D map.
+
+## The models
+
+Two Random Forests trained on the [AI4I 2020 Predictive Maintenance dataset](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset) (10,000 readings), evaluated on 2,000 rows they never saw:
+
+| Model | Job | Result |
+|---|---|---|
+| Failure detection | Will this machine fail? Calibrated risk, alert at 0.61 | 96% precision, 78% recall (53 of 68 failures, 2 false alarms), PR-AUC 0.90 |
+| Failure type | Heat dissipation, power, overstrain or tool wear | macro F1 0.93 on real failures |
+
+Logistic regression (PR-AUC 0.50) and XGBoost (0.88) were compared and lost. Full method, numbers and limits: [machine_learning/README.md](machine_learning/README.md).
+
+## Stack
+
+| Part | Built with |
+|---|---|
+| Website | React 19, TypeScript, Vite, three.js with React Three Fiber, Zustand |
+| Engineer app | Expo, React Native, Expo Router |
+| Plant server | Node.js, TypeScript, WebSockets (`ws`), Zod validation |
+| ML service | Python, FastAPI, scikit-learn, SHAP, pandas |
+| Copilot | Google Gemini |
+| Hardware | Arduino UNO R4 WiFi, Grove Base Shield, barometer, R280 motor, Grove Air Quality Sensor |
+| Tests | Vitest (web, server), pytest (ML) |
+
+One plant engine (`web/src/sim/engine.ts`) is a pure function shared by the server, the website and the app, so every screen shows the same plant.
+
+## Repository
 
 | Folder | What it is |
 |---|---|
-| `web/` | Website (Vite, React, three.js). Also holds the plant engine in `web/src/sim/` that the server and app share. |
-| `server/` | Plant server: runs the plant, takes sensor readings, asks the ML service for forecasts, pushes live state to every screen. |
-| `machine_learning/` | Failure detection and failure-type models, training pipeline, evaluation report, and the FastAPI service (`api.py`) the plant server calls. |
+| `web/` | Website and the shared plant engine in `web/src/sim/`. |
+| `server/` | Plant server: runs the plant, takes sensor readings, asks the ML service for predictions, pushes live state to every screen, hosts the copilot. |
+| `machine_learning/` | Both models, the training pipeline, the evaluation report, and the FastAPI service (`api.py`). |
 | `mobile/` | Engineer app (Expo, Android). |
+| `firmware/` | What the sensor board sends, and the board simulator. |
 | `ml/` | What an external ML laptop can post to the server (optional). |
-| `firmware/` | What the sensor board sends to the server, and the board simulator. |
-| `data/` | AI4I 2020 dataset and the script that trains the fallback decision tree. |
+| `data/` | AI4I 2020 dataset and the fallback decision tree used when the ML service is down. |
+| `docs/media/` | Demo video and screenshots. |
+
+## Quick start
+
+```
+./deploy.sh
+```
+
+Starts the ML service, plant server, website and phone app on one laptop. Needs `server/.env` (tokens and the Gemini key, not in git). Details below.
 
 ## Running the demo
 
