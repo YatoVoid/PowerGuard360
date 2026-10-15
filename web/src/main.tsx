@@ -10,9 +10,9 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
-// The splash in index.html plays at least one full logo animation, then stays until the page knows
-// whether it is following the plant server or running its own copy.
-const SPLASH_MIN_MS = 1600
+// The splash in index.html plays at least two full logo animations (1.6 s each), then stays until the page
+// knows whether it is following the plant server or running its own copy.
+const SPLASH_MIN_MS = 3200
 const splash = document.getElementById('splash')
 if (splash) {
   const hide = () => {
