@@ -1,4 +1,4 @@
-import { createContext, Suspense, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
+import { createContext, lazy, Suspense, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bvh, Environment, Html, Line, OrbitControls, Sky, useGLTF, useProgress } from "@react-three/drei";
 import * as THREE from "three";
@@ -667,7 +667,11 @@ function Tag(props: ComponentProps<typeof Html>) {
   return <Html portal={useContext(LabelRoot)} {...props} />;
 }
 
-// The plant model is a 1.8 MB download; until it lands the site is bare desert, so say what's coming.
+// Ambient occlusion costs a few GPU passes, so phones and small screens skip it.
+const RICH_SHADING = window.matchMedia("(pointer: fine)").matches && window.innerWidth >= 900;
+const Shading = lazy(() => import("./Shading"));
+
+// The plant model is a 2.2 MB download; until it lands the site is bare desert, so say what's coming.
 function ModelProgress() {
   const { active, progress } = useProgress();
   if (!active) return null;
@@ -700,6 +704,7 @@ export function PlantScene() {
       <FitToScreen />
       <OrbitControls ref={controls} target={[0, 0, -10]} maxPolarAngle={Math.PI / 2.2} minDistance={30} maxDistance={620} enableDamping dampingFactor={0.08} />
       <CameraRig controls={controls} />
+      {RICH_SHADING && <Suspense fallback={null}><Shading /></Suspense>}
     </Canvas>
     </LabelRoot.Provider>
     <ModelProgress />
