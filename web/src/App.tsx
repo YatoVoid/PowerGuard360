@@ -8,6 +8,7 @@ import { MaintenanceView } from "./views/Maintenance";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 import { CopilotButton, CopilotPanel } from "./ui/Copilot";
 import { signIn, signInOffered, signOut } from "./auth";
+import { LogoLoader, LogoMark } from "./ui/LogoLoader";
 
 const PlantScene = lazy(() => import("./scene/PlantScene").then((m) => ({ default: m.PlantScene })));
 
@@ -65,7 +66,7 @@ function LinkStatus() {
   const text = link === "live" ? "Live: plant server" : link === "connecting" ? "Connecting" : "Local simulation";
   return (
     <span className="realtime" title={link === "live" ? "Shared with every connected screen and phone" : "No plant server reachable. This page runs its own copy."}>
-      <span className={`dot ${link === "live" ? "dot-live" : ""}`} aria-hidden />{text}
+      {link === "connecting" ? <LogoMark size={16} /> : <span className={`dot ${link === "live" ? "dot-live" : ""}`} aria-hidden />}{text}
     </span>
   );
 }
@@ -100,7 +101,7 @@ function AdminAccess() {
           <label htmlFor="admin-password">Admin password</label>
           <input id="admin-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} maxLength={200} autoFocus />
           {error && <p className="admin-error" role="alert">{error}</p>}
-          <button type="submit" className="btn btn-primary" disabled={busy || !password}>{busy ? "Signing in" : "Sign in"}</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !password}>{busy ? <LogoLoader inline size={18} label="Signing in" /> : "Sign in"}</button>
         </form>
       )}
     </div>
@@ -212,7 +213,7 @@ function TwinView() {
     <div className="twin">
       <div className="kpi-row"><BalanceStats /></div>
       <div className={`scene ${showLabels ? "" : "labels-off"}`}>
-        <Suspense fallback={<div className="scene-loading">Loading plant model</div>}>
+        <Suspense fallback={<div className="scene-loading"><LogoLoader label="Loading plant model" /></div>}>
           <PlantScene />
         </Suspense>
         <SceneToolbar />

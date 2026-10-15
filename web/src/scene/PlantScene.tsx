@@ -1,11 +1,12 @@
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Bvh, Environment, Html, Line, OrbitControls, Sky, useGLTF } from "@react-three/drei";
+import { Bvh, Environment, Html, Line, OrbitControls, Sky, useGLTF, useProgress } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore, type CameraPreset } from "../store";
 import { UNIT_X } from "../sim/site";
 import { etaText } from "../ui/parts";
+import { LogoLoader } from "../ui/LogoLoader";
 import { LIVE_SENSOR_UNIT, SITE_REPLAY_SPEED, WALK_M_PER_S } from "../sim/engine";
 import type { Turbine } from "../types";
 
@@ -655,6 +656,13 @@ function Tag(props: ComponentProps<typeof Html>) {
   return <Html portal={useContext(LabelRoot)} {...props} />;
 }
 
+// The plant model is a 1.8 MB download; until it lands the site is bare desert, so say what's coming.
+function ModelProgress() {
+  const { active, progress } = useProgress();
+  if (!active) return null;
+  return <div className="scene-progress"><LogoLoader label={`Loading plant model ${Math.round(progress)}%`} /></div>;
+}
+
 export function PlantScene() {
   const root = useRef<HTMLDivElement>(null!);
   const controls = useRef<OrbitControlsImpl>(null);
@@ -683,6 +691,7 @@ export function PlantScene() {
       <CameraRig controls={controls} />
     </Canvas>
     </LabelRoot.Provider>
+    <ModelProgress />
     </div>
   );
 }

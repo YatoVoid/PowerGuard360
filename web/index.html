@@ -10,8 +10,39 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,500..800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
     <title>Power Guard 360</title>
+    <!-- The logo loader lives here, not in index.css, so the splash animates before the app's script and styles arrive.
+         src/ui/LogoLoader.tsx uses the same classes everywhere else something loads. -->
+    <style>
+      .pg-loader { display: block; overflow: visible; flex: none; }
+      .pg-l-edge { fill: none; stroke: #0b2f6b; stroke-width: 5.5; stroke-linejoin: round; stroke-dasharray: 100; animation: pg-edge 1.6s ease-in-out infinite; }
+      .pg-l-fill { fill: #2f6fde; transform-box: fill-box; transform-origin: center; animation: pg-fill 1.6s ease-out infinite; }
+      .pg-l-bolt { fill: #ffc21a; stroke: #ffc21a; stroke-width: 2; stroke-linejoin: round; transform-box: fill-box; transform-origin: center; animation: pg-bolt 1.6s ease-out infinite; }
+      @keyframes pg-edge { 0% { stroke-dashoffset: 100; opacity: 1; } 42%, 86% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
+      @keyframes pg-fill { 0%, 22% { opacity: 0; transform: scale(0.55); } 48%, 86% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+      @keyframes pg-bolt { 0%, 46% { opacity: 0; transform: scale(0.3) rotate(-12deg); } 56% { opacity: 1; transform: scale(1.18) rotate(0); } 64%, 86% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+      @keyframes pg-breathe { from { opacity: 0.45; } to { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) {
+        .pg-l-edge, .pg-l-fill, .pg-l-bolt { animation: none; stroke-dashoffset: 0; }
+        .pg-loader { animation: pg-breathe 1s ease-in-out infinite alternate; }
+      }
+
+      #splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-content: center; justify-items: center; gap: 18px; background: #eceef1; transition: opacity 0.4s ease, visibility 0.4s; }
+      #splash.is-done { opacity: 0; visibility: hidden; }
+      #splash p { margin: 0; font: 700 22px/1 "Archivo", "IBM Plex Sans", system-ui, sans-serif; letter-spacing: 0.01em; color: #0b2f6b; }
+      #splash p em { font-style: normal; color: #2f6fde; }
+      #splash span { font: 400 13px/1 "IBM Plex Sans", system-ui, sans-serif; color: #5b6573; }
+    </style>
   </head>
   <body>
+    <div id="splash" role="status" aria-label="Loading Power Guard 360">
+      <svg class="pg-loader" width="104" height="104" viewBox="0 0 100 100" aria-hidden="true">
+        <path class="pg-l-edge" pathLength="100" d="M50 4 L88 17 V46 C88 70 72 87 50 96 C28 87 12 70 12 46 V17 Z" />
+        <g class="pg-l-fill"><path d="M50 4 L88 17 V46 C88 70 72 87 50 96 C28 87 12 70 12 46 V17 Z" transform="translate(50 50) scale(0.76) translate(-50 -50)" /></g>
+        <g class="pg-l-bolt"><path d="M57 16 L33 54 H47 L41 84 L67 44 H53 Z" transform="translate(50 48) scale(0.62) translate(-50 -50)" /></g>
+      </svg>
+      <p>Power Guard <em>360</em></p>
+      <span>Connecting to the plant</span>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

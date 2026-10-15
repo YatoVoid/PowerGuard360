@@ -3,6 +3,7 @@ import { useCopilot, type CopilotMessage } from "../copilot";
 import { useCanControl, useStore } from "../store";
 import { assetLabel } from "../sim/site";
 import { IconClose, IconSpark } from "./icons";
+import { LogoLoader } from "./LogoLoader";
 
 function AssetLink({ id }: { id: string }) {
   const select = useStore((s) => s.select);
@@ -95,7 +96,7 @@ export function CopilotPanel() {
             {m.suggestion && <Suggestion s={m.suggestion} />}
           </li>
         ))}
-        {busy && <li className="cp-msg cp-copilot cp-busy">Reading plant data</li>}
+        {busy && <li className="cp-msg cp-copilot cp-busy"><LogoLoader inline size={20} label="Reading plant data" /></li>}
       </ol>
 
       {ready && (

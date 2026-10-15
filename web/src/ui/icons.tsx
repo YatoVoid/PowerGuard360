@@ -15,8 +15,8 @@ export const IconBell = () => (
 );
 // Brand mark: a shield (guard) holding a lightning bolt (power), framed by a second outline.
 // "color" sits on light backgrounds, "reverse" on the navy sidebar; the outline turns white there so it still reads.
-const SHIELD = "M50 4 L88 17 V46 C88 70 72 87 50 96 C28 87 12 70 12 46 V17 Z";
-const BOLT = "M57 16 L33 54 H47 L41 84 L67 44 H53 Z";
+export const SHIELD = "M50 4 L88 17 V46 C88 70 72 87 50 96 C28 87 12 70 12 46 V17 Z";
+export const BOLT = "M57 16 L33 54 H47 L41 84 L67 44 H53 Z";
 export const BrandMark = ({ size = 28, variant = "color" }: { size?: number; variant?: "color" | "reverse" }) => (
   <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden className="brand-mark">
     <path d={SHIELD} fill="none" stroke={variant === "reverse" ? "#fff" : "var(--brand-navy)"} strokeWidth="5.5" strokeLinejoin="round" />

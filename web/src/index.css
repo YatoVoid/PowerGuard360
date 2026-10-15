@@ -99,6 +99,7 @@ h1, h2, h3, h4 { margin: 0; }
 .top-meta { display: flex; align-items: center; gap: 14px; }
 .realtime { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); }
 .realtime .dot { margin-top: 0; }
+.realtime .pg-loader { margin-right: -1px; }
 /* admin sign-in: a small popover under the top bar button */
 .admin { position: relative; }
 .admin-btn { white-space: nowrap; }
@@ -266,6 +267,11 @@ h1, h2, h3, h4 { margin: 0; }
 .scene { grid-area: scene; position: relative; min-height: 0; overflow: hidden; background: #dde1e5; }
 .scene canvas { display: block; }
 .scene-loading { display: grid; place-items: center; height: 100%; color: var(--ink-2); }
+/* logo loader (animation itself is in index.html so the splash can use it before this file loads) */
+.pg-loading { display: inline-grid; justify-items: center; gap: 10px; color: var(--ink-2); font-size: var(--fs-s); }
+.pg-loading-inline { display: inline-flex; align-items: center; gap: 8px; }
+.btn .pg-l-edge { stroke: currentColor; }
+.scene-progress { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; background: rgb(236 238 241 / 0.72); pointer-events: none; }
 .scene-tools { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; z-index: 5; }
 .seg { display: flex; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 2px; box-shadow: 0 1px 2px rgb(16 24 40 / 0.06); }
 .seg button { border: 0; background: none; padding: 5px 11px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
@@ -573,8 +579,6 @@ h1, h2, h3, h4 { margin: 0; }
 .cp-copilot { padding-left: 12px; border-left: 2px solid var(--accent); }
 .cp-error { border-left-color: var(--trip); color: var(--ink-2); }
 .cp-busy { color: var(--ink-3); font-size: var(--fs-s); }
-.cp-busy::after { content: ""; display: inline-block; width: 1.2em; text-align: left; animation: cp-dots 1.2s steps(4) infinite; }
-@keyframes cp-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 .cp-suggest { margin-top: 10px; padding: 10px 12px; display: grid; gap: 8px; background: var(--surface-2); border: 1px solid var(--rule); border-radius: var(--radius-s); }
 .cp-suggest p { font-size: var(--fs-s); color: var(--ink-2); }
 .cp-suggest strong { color: var(--ink); font-weight: 600; }
@@ -591,7 +595,6 @@ h1, h2, h3, h4 { margin: 0; }
 @media (max-width: 720px) {
   .copilot { width: 100%; top: 48px; bottom: 64px; z-index: 30; }
 }
-@media (prefers-reduced-motion: reduce) { .cp-busy::after { animation: none; content: "..."; } }
 .live-tag { margin-left: 8px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: #e3f5ec; color: #137a4b; vertical-align: 1px; }
 .kv dd.muted { color: var(--ink-3); font-weight: 400; }
 
