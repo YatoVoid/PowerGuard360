@@ -137,7 +137,10 @@ function PlantModel() {
   const { scene } = useGLTF(PLANT_URL, DRACO_URL);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
   const nodes = useMemo(() => {
-    scene.traverse((o) => {
+    // <primitive> moves each node out of its parent, so the cached glTF scene would be empty the next time the
+    // Plant view mounts. A clone shares geometry and textures, so it is cheap.
+    const root = scene.clone();
+    root.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       o.receiveShadow = true;
       o.castShadow = !NO_CAST.test(o.name);
@@ -145,7 +148,7 @@ function PlantModel() {
       const map = (o.material as THREE.MeshStandardMaterial).map;
       if (map) map.anisotropy = Math.min(8, maxAniso);
     });
-    return [...scene.children];
+    return [...root.children];
   }, [scene, maxAniso]);
   return (
     <>
