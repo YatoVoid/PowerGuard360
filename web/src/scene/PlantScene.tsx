@@ -2,7 +2,7 @@ import { createContext, Suspense, useContext, useEffect, useMemo, useRef, type C
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bvh, Environment, Html, Line, OrbitControls, Sky, useGLTF, useProgress } from "@react-three/drei";
 import * as THREE from "three";
-import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import type { GLTFLoader, OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore, type CameraPreset } from "../store";
 import { UNIT_X } from "../sim/site";
 import { etaText } from "../ui/parts";
@@ -128,13 +128,21 @@ function assetPosition(id: string | null): V3 | null {
 const PLANT_URL = `${import.meta.env.BASE_URL}models/plant.glb`;
 // Served from web/public so the plant loads without internet.
 const DRACO_URL = `${import.meta.env.BASE_URL}draco/`;
+// Chrome and Firefox decode glTF textures by fetch()ing blob: URLs, which the site's CSP (connect-src) refuses, so every
+// surface came out white. Loading them as <img> goes through img-src, which allows blob:, and is what Safari does anyway.
+function imageTextures(loader: GLTFLoader) {
+  loader.register((parser) => {
+    (parser as unknown as { textureLoader: THREE.Loader }).textureLoader = new THREE.TextureLoader(parser.options.manager);
+    return { name: "pg_image_textures" } as ReturnType<Parameters<GLTFLoader["register"]>[0]>;
+  });
+}
 const SELECTABLE_NODES = new Set(["acc", "gas", "switchyard", "datacenter", "battery", "control"]);
 // Ground and paint lie flat on the ground; letting them cast shadows only adds acne.
 const NO_CAST = /desert|gravel|asphalt|paint/;
 
 // Each top-level node of the model is one asset, named the way the store names it.
 function PlantModel() {
-  const { scene } = useGLTF(PLANT_URL, DRACO_URL);
+  const { scene } = useGLTF(PLANT_URL, DRACO_URL, true, imageTextures);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
   const nodes = useMemo(() => {
     // <primitive> moves each node out of its parent, so the cached glTF scene would be empty the next time the
@@ -158,7 +166,7 @@ function PlantModel() {
     </>
   );
 }
-useGLTF.preload(PLANT_URL, DRACO_URL);
+useGLTF.preload(PLANT_URL, DRACO_URL, true, imageTextures);
 
 function BeaconLight({ position }: { position: V3 }) {
   const mat = useRef<THREE.MeshBasicMaterial>(null);
