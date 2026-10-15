@@ -479,6 +479,14 @@ h1, h2, h3, h4 { margin: 0; }
   .crumb-brand { display: inline-flex; }
   .crumbs .crumb:not(.crumb-current), .crumbs .crumb-sep { display: none; }
   .realtime, .top-meta .src { display: none; }
+  .top { gap: 8px; }
+  .top-meta { gap: 6px; flex: none; }
+  .admin-long { display: none; }
+  .admin-btn { padding: 6px 10px; }
+  .top { position: relative; }
+  .admin { position: static; }
+  .admin-form { right: var(--gutter); width: min(280px, calc(100vw - 2 * var(--gutter))); }
+  .crumb-current { overflow: hidden; text-overflow: ellipsis; }
   .tabs {
     display: flex; position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; gap: 2px;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--rule); background: var(--surface);
@@ -542,6 +550,8 @@ h1, h2, h3, h4 { margin: 0; }
 
 .maint { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100%; }
 .maint-board { display: grid; grid-template-columns: minmax(280px, 1.3fr) repeat(3, minmax(0, 1fr)); gap: var(--gap); padding: var(--gutter); overflow-y: auto; align-items: start; }
+.maint-col, .req { min-width: 0; }
+.maint-col ul, .req { grid-template-columns: minmax(0, 1fr); }
 .maint-col header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .maint-col h2 { font-size: 13px; font-weight: 600; }
 .maint-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -603,7 +613,7 @@ h1, h2, h3, h4 { margin: 0; }
 .kv dd { font-weight: 600; }
 @media (max-width: 720px) { .stats dd { font-size: 20px; } }
 
-.scene-root { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.scene-root { position: relative; width: 100%; height: 100%; overflow: hidden; isolation: isolate; }
 
 /* copilot: a working panel beside the plant, not a chat widget, so it docks full height and keeps the plant's visual language */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -697,3 +707,5 @@ h1, h2, h3, h4 { margin: 0; }
 .unit.has-rec .unit-meta { color: var(--watch-ink); font-weight: 600; }
 .pending-strip { display: grid; gap: 4px; margin-bottom: 12px; padding: 9px 11px; background: var(--watch-bg); border: 1px solid #f0d58a; border-radius: var(--radius-s); color: var(--watch-ink); font-size: 13px; }
 .pending-strip span { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+/* Small phones: the plant clock gives way so the controls fit. */
+@media (max-width: 420px) { .top-meta .clock { display: none; } }

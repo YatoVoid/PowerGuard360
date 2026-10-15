@@ -85,12 +85,12 @@ function AdminAccess() {
   useEffect(() => { if (link === "live") signInOffered().then(setOffered); }, [link]);
   if (link !== "live") return null;
   if (role === "admin") {
-    return <button type="button" className="btn btn-quiet admin-btn" onClick={() => signOut()} title="Signed in as plant manager">Admin · Sign out</button>;
+    return <button type="button" className="btn btn-quiet admin-btn" onClick={() => signOut()} title="Signed in as plant manager"><span className="admin-long">Admin · </span>Sign out</button>;
   }
   if (!offered) return <span className="realtime" title="Sign in as admin to control the plant">View only</span>;
   return (
     <div className="admin">
-      <button type="button" className="btn btn-quiet admin-btn" aria-expanded={open} onClick={() => { setOpen(!open); setError(null); }}>View only · Sign in</button>
+      <button type="button" className="btn btn-quiet admin-btn" aria-expanded={open} onClick={() => { setOpen(!open); setError(null); }}><span className="admin-long">View only · </span>Sign in</button>
       {open && (
         <form className="admin-form" onSubmit={async (e) => {
           e.preventDefault();
