@@ -1,9 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Line, OrbitControls } from "@react-three/drei";
-import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { Bvh, Environment, Html, Line, OrbitControls, Sky, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useStore, type CameraPreset } from "../store";
 import { UNIT_X } from "../sim/site";
@@ -13,7 +11,8 @@ import type { Turbine } from "../types";
 
 // Layout follows a combined-cycle plant: gas turbine -> heat recovery steam generator (HRSG) with the
 // stack on top -> steam turbine hall -> air-cooled condenser, which West Texas plants use instead of
-// water cooling towers.
+// water cooling towers. The buildings and equipment are a Blender model (blender/build_plant.py) styled
+// after a Permian Basin plant built for an AI data center; this file draws the live parts on top of it.
 
 type V3 = [number, number, number];
 
@@ -23,13 +22,7 @@ const STATUS_COLOR: Record<Turbine["status"], string> = {
   tripped: "#c8261e",
   offline: "#5d6360",
 };
-const STEEL = "#b4bac1";
-const CLAD = "#eceef1";
-const GRAVEL = "#e4e7ea";
-const ASPHALT = "#a3a9b0";
 const FLOW = "#2f5d8a";
-const GAS = "#c9a227";
-const PAD = { x0: -190, x1: 190, z0: -118, z1: 96 };
 const BUS_Z = -86;
 const SWITCHYARD = { x: 152, z: -45 };
 
@@ -131,85 +124,37 @@ function assetPosition(id: string | null): V3 | null {
   return null;
 }
 
-function Box({ p, s, c, cast = false, rough = 0.75, metal = 0.1 }: { p: V3; s: V3; c: string; cast?: boolean; rough?: number; metal?: number }) {
-  return (
-    <mesh position={p} castShadow={cast} receiveShadow>
-      <boxGeometry args={s} />
-      <meshStandardMaterial color={c} roughness={rough} metalness={metal} />
-    </mesh>
-  );
-}
+const PLANT_URL = `${import.meta.env.BASE_URL}models/plant.glb`;
+// Served from web/public so the plant loads without internet.
+const DRACO_URL = `${import.meta.env.BASE_URL}draco/`;
+const SELECTABLE_NODES = new Set(["acc", "gas", "switchyard", "datacenter", "battery", "control"]);
+// Ground and paint lie flat on the ground; letting them cast shadows only adds acne.
+const NO_CAST = /desert|gravel|asphalt|paint/;
 
-type BoxSpec = { p: V3; s: V3; c: string };
-type BeamSpec = { a: V3; b: V3; r: number; c: string };
-type BallSpec = { p: V3; r: number; c: string };
-
-function paint(g: THREE.BufferGeometry, hex: string) {
-  const col = new THREE.Color(hex);
-  const n = g.attributes.position.count;
-  const arr = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) { arr[i * 3] = col.r; arr[i * 3 + 1] = col.g; arr[i * 3 + 2] = col.b; }
-  g.setAttribute("color", new THREE.BufferAttribute(arr, 3));
-  return g;
-}
-
-// Static parts that never change are merged into one mesh, with their colors stored per vertex.
-// That turns hundreds of draw calls into a handful.
-function buildMerged(boxes: BoxSpec[] = [], beams: BeamSpec[] = [], balls: BallSpec[] = []) {
-  const parts: THREE.BufferGeometry[] = [];
-  for (const b of boxes) parts.push(paint(new THREE.BoxGeometry(...b.s).translate(...b.p), b.c));
-  const up = new THREE.Vector3(0, 1, 0);
-  for (const b of beams) {
-    const a = new THREE.Vector3(...b.a), e = new THREE.Vector3(...b.b);
-    const dir = e.clone().sub(a);
-    const g = new THREE.CylinderGeometry(b.r, b.r, dir.length(), b.r > 1 ? 18 : 6);
-    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir.normalize()));
-    const mid = a.add(e).multiplyScalar(0.5);
-    parts.push(paint(g.translate(mid.x, mid.y, mid.z), b.c));
-  }
-  for (const b of balls) parts.push(paint(new THREE.SphereGeometry(b.r, 16, 12).translate(...b.p), b.c));
-  const merged = mergeGeometries(parts, false);
-  parts.forEach((g) => g.dispose());
-  return merged ?? new THREE.BufferGeometry();
-}
-
-function Merged({ boxes, beams, balls, cast = false, rough = 0.7, metal = 0.12 }: {
-  boxes?: BoxSpec[]; beams?: BeamSpec[]; balls?: BallSpec[]; cast?: boolean; rough?: number; metal?: number;
-}) {
-  const geo = useMemo(() => buildMerged(boxes, beams, balls), [boxes, beams, balls]);
-  useEffect(() => () => geo.dispose(), [geo]);
-  return (
-    <mesh geometry={geo} castShadow={cast} receiveShadow>
-      <meshStandardMaterial vertexColors roughness={rough} metalness={metal} />
-    </mesh>
-  );
-}
-
-function Site() {
-  const w = PAD.x1 - PAD.x0, d = PAD.z1 - PAD.z0;
-  const cx = (PAD.x0 + PAD.x1) / 2, cz = (PAD.z0 + PAD.z1) / 2;
-  const fence: V3[] = [
-    [PAD.x0 - 12, 1.6, PAD.z0 - 12], [PAD.x1 + 12, 1.6, PAD.z0 - 12], [PAD.x1 + 12, 1.6, PAD.z1 + 12],
-    [PAD.x0 - 12, 1.6, PAD.z1 + 12], [PAD.x0 - 12, 1.6, PAD.z0 - 12],
-  ];
+// Each top-level node of the model is one asset, named the way the store names it.
+function PlantModel() {
+  const { scene } = useGLTF(PLANT_URL, DRACO_URL);
+  const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
+  const nodes = useMemo(() => {
+    scene.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      o.receiveShadow = true;
+      o.castShadow = !NO_CAST.test(o.name);
+      // Ground textures are seen at a grazing angle from the default camera.
+      const map = (o.material as THREE.MeshStandardMaterial).map;
+      if (map) map.anisotropy = Math.min(8, maxAniso);
+    });
+    return [...scene.children];
+  }, [scene, maxAniso]);
   return (
     <>
-      <mesh rotation-x={-Math.PI / 2} receiveShadow>
-        <planeGeometry args={[1100, 900]} />
-        <meshStandardMaterial color="#d3d7db" roughness={1} />
-      </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[cx, 0.05, cz]} receiveShadow>
-        <planeGeometry args={[w + 22, d + 22]} />
-        <meshStandardMaterial color={ASPHALT} roughness={0.95} />
-      </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[cx, 0.1, cz]} receiveShadow>
-        <planeGeometry args={[w, d]} />
-        <meshStandardMaterial color={GRAVEL} roughness={1} />
-      </mesh>
-      <Line points={fence} color="#6b6862" lineWidth={1.2} />
+      {nodes.map((n) => n.name.startsWith("GT-") || SELECTABLE_NODES.has(n.name)
+        ? <Selectable key={n.name} id={n.name}><primitive object={n} /></Selectable>
+        : <primitive key={n.name} object={n} />)}
     </>
   );
 }
+useGLTF.preload(PLANT_URL, DRACO_URL);
 
 function BeaconLight({ position }: { position: V3 }) {
   const mat = useRef<THREE.MeshBasicMaterial>(null);
@@ -263,21 +208,6 @@ function Label({ id, className = "", children }: { id: string; className?: strin
   );
 }
 
-const TURBINE_BOXES: BoxSpec[] = [
-  { p: [0, 3, -72], s: [7, 6, 9], c: "#8b918d" },
-  { p: [0, 13, -60], s: [10, 9, 8], c: STEEL },
-  { p: [-4, 4.3, -63], s: [0.6, 8.6, 0.6], c: "#5c625e" },
-  { p: [4, 4.3, -63], s: [0.6, 8.6, 0.6], c: "#5c625e" },
-  { p: [0, 7, -56], s: [4, 4, 3], c: STEEL },
-  { p: [0, 4, -48], s: [8, 8, 14], c: "#c3c6bf" },
-  { p: [0, 6, -38], s: [7, 8, 6], c: "#9da39e" },
-  { p: [0, 10, -23], s: [11, 20, 24], c: CLAD },
-  { p: [0, 20.3, -23], s: [11.4, 0.6, 24.4], c: "#a9aea8" },
-  { p: [0, 33, -9], s: [5.6, 0.5, 5.6], c: "#5c625e" },
-  { p: [8, 2.6, -74], s: [5, 5.2, 4.5], c: "#6f7672" },
-];
-const TURBINE_BEAMS: BeamSpec[] = [{ a: [0, 0, -9], b: [0, 36, -9], r: 2.35, c: "#9aa1a9" }];
-
 function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; selected: boolean }) {
   const x = UNIT_X(index);
   const color = STATUS_COLOR[tb.status];
@@ -297,8 +227,7 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   return (
     <Selectable id={tb.id}>
       <group position={[x, 0, 0]}>
-        {/* gas turbine enclosure with status band */}
-        <Merged boxes={TURBINE_BOXES} beams={TURBINE_BEAMS} cast />
+        {/* status band on the gas turbine enclosure roof */}
         <mesh position={[0, 8.15, -48]}>
           <boxGeometry args={[8.1, 0.35, 14.1]} />
           <meshStandardMaterial color={color} emissive={alarm ? color : "#000"} emissiveIntensity={alarm ? 1.5 : 0} toneMapped={!alarm} />
@@ -331,27 +260,9 @@ function TurbineUnit({ tb, index, selected }: { tb: Turbine; index: number; sele
   );
 }
 
-// Ribbed look for finned tube bundles and the wind wall, drawn once into a small canvas.
-function useStripeTexture(base: string, line: string, rx: number, ry: number) {
-  const tex = useMemo(() => {
-    const c = document.createElement("canvas");
-    c.width = 64; c.height = 8;
-    const g = c.getContext("2d")!;
-    g.fillStyle = base; g.fillRect(0, 0, 64, 8);
-    g.fillStyle = line;
-    for (let x = 0; x < 64; x += 8) g.fillRect(x, 0, 2, 8);
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(rx, ry);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }, [base, line, rx, ry]);
-  useEffect(() => () => tex.dispose(), [tex]);
-  return tex;
-}
-
 // Air-cooled condenser, after a standard A-frame design: axial fans at deck level push air up through
 // inclined finned tube bundles; steam enters along the apex header and condenses on the way down.
+// The structure is in the model; the fans turn here, faster as the plant makes more power.
 const ACC = {
   streets: [-172, -161, -150],
   width: 10,
@@ -362,63 +273,16 @@ const ACC = {
   fansPerStreet: 6,
 };
 
-function accSpecs() {
-  const { streets, width, z0, z1, deck, apex } = ACC;
-  const len = z1 - z0, zc = (z0 + z1) / 2, half = width / 2;
-  const xMin = streets[0] - half - 0.5, xMax = streets[streets.length - 1] + half + 0.5;
-  const colX = [xMin, ...streets.slice(1).map((x) => x - half - 0.5), xMax];
-  const colZ = [z0, z0 + len * 0.25, z0 + len * 0.5, z0 + len * 0.75, z1];
-  const steel = "#7a807c", beam = "#8a908b", white = "#e6e6e1", cond = "#b8bdb8";
-  const frameBoxes: BoxSpec[] = [];
-  const frameBeams: BeamSpec[] = [];
-  for (const x of colX) for (const z of colZ) frameBoxes.push({ p: [x, deck / 2, z], s: [0.9, deck, 0.9], c: steel });
-  for (const x of colX) frameBoxes.push({ p: [x, deck - 0.3, zc], s: [0.8, 0.8, len + 1], c: beam });
-  for (const z of colZ) frameBoxes.push({ p: [(xMin + xMax) / 2, deck - 0.3, z], s: [xMax - xMin, 0.8, 0.8], c: beam });
-  const brace = (a: V3, b: V3) => frameBeams.push({ a, b, r: 0.18, c: steel });
-  for (let i = 0; i < colZ.length - 1; i++) for (const x of [xMin, xMax]) {
-    brace([x, 0.5, colZ[i]], [x, deck - 1, colZ[i + 1]]); brace([x, deck - 1, colZ[i]], [x, 0.5, colZ[i + 1]]);
-  }
-  for (let i = 0; i < colX.length - 1; i++) for (const z of [z0, z1]) {
-    brace([colX[i], 0.5, z], [colX[i + 1], deck - 1, z]); brace([colX[i], deck - 1, z], [colX[i + 1], 0.5, z]);
-  }
-  const top = apex + 0.6;
-  const pipeBeams: BeamSpec[] = [
-    { a: [-136, 14, -58], b: [-140, 14, -58], r: 2.4, c: white },
-    { a: [-140, 14, -58], b: [-140, 14, -90], r: 2.4, c: white },
-    { a: [-140, 14, -90], b: [-140, top, -90], r: 2.4, c: white },
-    { a: [-140, top, -90], b: [streets[0], top, -90], r: 2, c: white },
-  ];
-  const pipeBalls: BallSpec[] = [
-    { p: [-140, 14, -58], r: 2.5, c: white }, { p: [-140, 14, -90], r: 2.5, c: white }, { p: [-140, top, -90], r: 2.5, c: white },
-  ];
-  for (const x of streets) {
-    pipeBalls.push({ p: [x, top, -90], r: 2.08, c: white });
-    pipeBeams.push(
-      { a: [x, top, -90], b: [x, top, z0 - 6], r: 1.6, c: white },
-      { a: [x, top, z0 - 6], b: [x, top, z1], r: 1.3, c: white },
-      { a: [x - half + 0.4, deck + 0.4, z0], b: [x - half + 0.4, deck + 0.4, z1], r: 0.35, c: cond },
-      { a: [x + half - 0.4, deck + 0.4, z0], b: [x + half - 0.4, deck + 0.4, z1], r: 0.35, c: cond },
-    );
-  }
-  return { frameBoxes, frameBeams, pipeBeams, pipeBalls };
-}
-const ACC_SPECS = accSpecs();
-
 function AirCooledCondenser() {
   const fans = useRef<THREE.InstancedMesh>(null);
   const angle = useRef(0);
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const finTex = useStripeTexture("#5d6460", "#3f4542", 24, 1);
-  const wallTex = useStripeTexture("#dcdcd6", "#c9cac3", 40, 1);
   const { streets, width, z0, z1, deck, apex, fansPerStreet } = ACC;
   const len = z1 - z0;
   const zc = (z0 + z1) / 2;
   const fanPitch = len / fansPerStreet;
   const fanCount = streets.length * fansPerStreet;
   const xMin = streets[0] - width / 2 - 0.5, xMax = streets[streets.length - 1] + width / 2 + 0.5;
-  const half = width / 2;
-  const tilt = Math.atan2(apex - deck, half);
-  const slant = Math.hypot(apex - deck, half);
 
   useFrame((_, dt) => {
     if (!fans.current) return;
@@ -435,8 +299,6 @@ function AirCooledCondenser() {
     fans.current.instanceMatrix.needsUpdate = true;
   });
 
-  const wallH = apex + 1 - deck;
-  const wallY = deck + wallH / 2;
   const shrouds = useRef<THREE.InstancedMesh>(null);
   useEffect(() => {
     if (!shrouds.current) return;
@@ -453,42 +315,14 @@ function AirCooledCondenser() {
   return (
     <Selectable id="acc">
     <group>
-      {/* support columns, deck beams and cross bracing */}
-      <Merged boxes={ACC_SPECS.frameBoxes} beams={ACC_SPECS.frameBeams} cast />
       <instancedMesh ref={shrouds} args={[undefined, undefined, fanCount]}>
         <cylinderGeometry args={[4.3, 4.3, 1.6, 28, 1, true]} />
-        <meshStandardMaterial color="#9ca29d" side={THREE.DoubleSide} />
+        <meshStandardMaterial color="#9ca29d" metalness={0.5} roughness={0.45} side={THREE.DoubleSide} />
       </instancedMesh>
       <instancedMesh ref={fans} args={[undefined, undefined, fanCount]}>
         <boxGeometry args={[7.8, 0.15, 0.8]} />
         <meshStandardMaterial color="#4f5552" />
       </instancedMesh>
-      {/* A-frame tube bundles */}
-      {streets.map((x) => [-1, 1].map((side) => (
-        <mesh
-          key={`${x}${side}`}
-          position={[x + (side * half) / 2, (deck + apex) / 2, zc]}
-          rotation={[0, 0, side * (Math.PI / 2 - tilt)]}
-          receiveShadow
-        >
-          <boxGeometry args={[0.5, slant, len]} />
-          <meshStandardMaterial map={finTex} roughness={0.85} metalness={0.25} />
-        </mesh>
-      )))}
-      {/* steam duct, manifold, apex headers and condensate headers */}
-      <Merged beams={ACC_SPECS.pipeBeams} balls={ACC_SPECS.pipeBalls} cast rough={0.45} metal={0.15} />
-      {/* wind wall around the bundles */}
-      {[
-        { p: [xMin, wallY, zc] as V3, s: [0.4, wallH, len + 0.8] as V3 },
-        { p: [xMax, wallY, zc] as V3, s: [0.4, wallH, len + 0.8] as V3 },
-        { p: [(xMin + xMax) / 2, wallY, z1] as V3, s: [xMax - xMin, wallH, 0.4] as V3 },
-        { p: [(xMin + xMax) / 2, wallY, z0] as V3, s: [xMax - xMin, wallH, 0.4] as V3 },
-      ].map((w, i) => (
-        <mesh key={i} position={w.p} castShadow receiveShadow>
-          <boxGeometry args={w.s} />
-          <meshStandardMaterial map={wallTex} roughness={0.7} />
-        </mesh>
-      ))}
       <Tag position={[(xMin + xMax) / 2, apex + 8, zc]} center zIndexRange={[10, 0]}>
         <Label id="acc" className="tag-muted"><strong>Air-cooled condenser</strong></Label>
       </Tag>
@@ -497,23 +331,6 @@ function AirCooledCondenser() {
   );
 }
 
-function SteamCycle() {
-  return (
-    <group>
-      {/* steam turbine hall */}
-      <Box p={[-126, 11, -44]} s={[22, 22, 40]} c={CLAD} cast />
-      <Box p={[-126, 22.4, -44]} s={[22.4, 0.8, 40.4]} c="#a9aea8" />
-      <AirCooledCondenser />
-    </group>
-  );
-}
-
-const GAS_BOXES: BoxSpec[] = [
-  { p: [118, 2, -34], s: [12, 4, 8], c: "#d5d1c4" },
-  { p: [110, 3, -30], s: [1.2, 6, 1.2], c: GAS },
-  { p: [114, 3, -30], s: [1.2, 6, 1.2], c: GAS },
-];
-
 function GasSupply() {
   const gas = useStore((s) => s.plant.gas);
   const recommended = useStore((s) => s.plant.recommendations.some((r) => r.asset === "gas" && r.status === "pending"));
@@ -521,12 +338,6 @@ function GasSupply() {
   return (
     <Selectable id="gas">
     <group>
-      <mesh position={[0, 1, -38]} rotation-z={Math.PI / 2}>
-        <cylinderGeometry args={[0.9, 0.9, 220, 12]} />
-        <meshStandardMaterial color={GAS} roughness={0.5} metalness={0.3} />
-      </mesh>
-      {/* metering station where the pipeline enters */}
-      <Merged boxes={GAS_BOXES} />
       <Tag position={[118, 9, -34]} center zIndexRange={[10, 0]}>
         <Label id="gas" className={tone}>
           <strong>Gas metering</strong>
@@ -539,72 +350,16 @@ function GasSupply() {
   );
 }
 
-function switchyardSpecs(): { boxes: BoxSpec[]; beams: BeamSpec[] } {
-  const { x, z } = SWITCHYARD;
-  const steel = "#7a807c";
-  const boxes: BoxSpec[] = [];
-  for (const dx of [-14, 0, 14]) for (const dz of [-22, -2, 18]) {
-    const gx = x + dx, gz = z + dz;
-    boxes.push(
-      { p: [gx - 4, 6, gz], s: [0.5, 12, 0.5], c: steel },
-      { p: [gx + 4, 6, gz], s: [0.5, 12, 0.5], c: steel },
-      { p: [gx, 12, gz], s: [9, 0.6, 0.6], c: steel },
-      { p: [gx, 1.6, gz + 5], s: [2, 3.2, 1.6], c: "#9aa09b" },
-    );
-  }
-  // transmission tower leaving the site
-  const tx = x + 40;
-  boxes.push({ p: [tx, 26, z], s: [16, 0.6, 0.6], c: steel }, { p: [tx, 20, z], s: [12, 0.6, 0.6], c: steel });
-  const beams: BeamSpec[] = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([a, b]) => ({
-    a: [tx + a * 2.6, 0, z + b * 2.6] as V3, b: [tx + a * 0.6, 30, z + b * 0.6] as V3, r: 0.3, c: steel,
-  }));
-  return { boxes, beams };
-}
-const SWITCHYARD_SPECS = switchyardSpecs();
-
 function Switchyard() {
   const { x, z } = SWITCHYARD;
-  const fence: V3[] = [[x - 26, 1.2, z - 34], [x + 26, 1.2, z - 34], [x + 26, 1.2, z + 34], [x - 26, 1.2, z + 34], [x - 26, 1.2, z - 34]];
   return (
     <Selectable id="switchyard">
     <group>
-      <mesh rotation-x={-Math.PI / 2} position={[x, 0.15, z]} receiveShadow>
-        <planeGeometry args={[52, 68]} />
-        <meshStandardMaterial color="#d8dbdf" roughness={1} />
-      </mesh>
-      <Line points={fence} color="#6b6862" lineWidth={1} />
-      <Merged boxes={SWITCHYARD_SPECS.boxes} beams={SWITCHYARD_SPECS.beams} cast />
       <Tag position={[x, 18, z]} center zIndexRange={[10, 0]}>
         <Label id="switchyard" className="tag-muted"><strong>Switchyard</strong></Label>
       </Tag>
     </group>
     </Selectable>
-  );
-}
-
-const UTILITY_BOXES: BoxSpec[] = [
-  // lube oil fin-fan coolers
-  ...Array.from({ length: 5 }, (_, i): BoxSpec[] => [
-    { p: [30 + i * 9, 3, -104], s: [8, 2, 7], c: "#a3a8a3" },
-    { p: [30 + i * 9 - 3.4, 1, -107], s: [0.4, 2, 0.4], c: "#5c625e" },
-    { p: [30 + i * 9 + 3.4, 1, -101], s: [0.4, 2, 0.4], c: "#5c625e" },
-    { p: [30 + i * 9, 4.05, -104], s: [5.2, 0.1, 5.2], c: "#5f6561" },
-  ]).flat(),
-  // admin and control building
-  { p: [-120, 4, 72], s: [30, 8, 16], c: "#d8d5cc" },
-];
-
-function Utilities() {
-  return (
-    <group>
-      {[[100, 18], [116, 18]].map(([x, z], i) => (
-        <mesh key={i} position={[x, 7, z]} castShadow receiveShadow>
-          <cylinderGeometry args={[6.5, 6.5, 14, 28]} />
-          <meshStandardMaterial color="#eeeee9" roughness={0.6} />
-        </mesh>
-      ))}
-      <Merged boxes={UTILITY_BOXES} />
-    </group>
   );
 }
 
@@ -624,7 +379,6 @@ const UNIT_LINES: V3[][] = Array.from({ length: 8 }, (_, i) => [[UNIT_X(i) + 8, 
 const BUS_LINE: V3[] = [[UNIT_X(0) + 8, 9, BUS_Z], [SWITCHYARD.x - 14, 9, BUS_Z], [SWITCHYARD.x - 14, 9, SWITCHYARD.z - 34]];
 const DC_LINE: V3[] = [[SWITCHYARD.x - 20, 9, SWITCHYARD.z + 34], [SWITCHYARD.x - 20, 9, 60], [76, 9, 60]];
 const BATTERY_LINE: V3[] = [[-150, 7, 40], [-150, 9, 60], [-76, 9, 60]];
-const PYLONS: BoxSpec[] = [-90, -30, 30, 90].map((x) => ({ p: [x + 8, 4.5, BUS_Z], s: [0.6, 9, 0.6], c: "#5c625e" }));
 
 function PowerFlow() {
   const turbines = useStore((s) => s.plant.turbines);
@@ -639,15 +393,9 @@ function PowerFlow() {
       <FlowLine points={BUS_LINE} mw={output} max={2700} />
       <FlowLine points={DC_LINE} mw={demand} max={2700} />
       <FlowLine points={BATTERY_LINE} mw={Math.abs(battery.powerMw)} max={400} />
-      <Merged boxes={PYLONS} />
     </group>
   );
 }
-
-const DC_BOXES: BoxSpec[] = [
-  { p: [0, 8, 62], s: [150, 16, 32], c: "#f1f2f4" },
-  ...[-50, -20, 10, 40].map((x): BoxSpec => ({ p: [x, 17, 66], s: [10, 2, 8], c: "#a7aba5" })),
-];
 
 function DataCenter() {
   const demand = useStore((s) => s.plant.demandMw);
@@ -667,7 +415,6 @@ function DataCenter() {
   return (
     <Selectable id="datacenter">
       <group>
-        <Merged boxes={DC_BOXES} cast rough={0.8} />
         <instancedMesh ref={racks} args={[undefined, undefined, count]}>
           <boxGeometry args={[3.6, 0.5, 0.2]} />
           <meshStandardMaterial color="#9fc3e6" emissive="#6fa8dc" emissiveIntensity={glow} toneMapped={false} />
@@ -836,19 +583,26 @@ function ControlRoom() {
   );
 }
 
-// Neutral engineering backdrop: flat grey, soft room reflections, no sky.
-function Studio() {
-  const { scene, gl } = useThree();
+// Late-afternoon West Texas sun from the south-west, so shadows fall long across the pad toward the camera's right.
+const SUN: V3 = [-230, 150, 160];
+const SKY = { sunPosition: SUN, turbidity: 7, rayleigh: 1.3, mieCoefficient: 0.006, mieDirectionalG: 0.85 } as const;
+
+function Desert() {
+  const scene = useThree((s) => s.scene);
   useEffect(() => {
-    scene.background = new THREE.Color("#dde1e5");
-    scene.fog = new THREE.Fog("#dde1e5", 420, 900);
-    const pmrem = new THREE.PMREMGenerator(gl);
-    const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    scene.environment = env;
-    scene.environmentIntensity = 0.45;
-    return () => { scene.environment = null; scene.fog = null; env.dispose(); pmrem.dispose(); };
-  }, [scene, gl]);
-  return null;
+    // Dusty haze toward the horizon; it also hides where the modelled desert ends.
+    scene.fog = new THREE.Fog("#d8cdb9", 520, 1500);
+    return () => { scene.fog = null; };
+  }, [scene]);
+  return (
+    <>
+      {/* The sky shader pins itself to the far plane, so a huge box never clips. */}
+      <Sky {...SKY} distance={450000} />
+      <Environment resolution={128} environmentIntensity={0.45}>
+        <Sky {...SKY} distance={450000} />
+      </Environment>
+    </>
+  );
 }
 
 function Scene() {
@@ -856,19 +610,23 @@ function Scene() {
   const selected = useStore((s) => s.selected);
   return (
     <>
-      <Studio />
-      <hemisphereLight args={["#ffffff", "#c4c9cf", 0.7]} />
+      <Desert />
+      <hemisphereLight args={["#dce8f5", "#b39a76", 0.55]} />
       <directionalLight
-        position={[-160, 220, -90]} intensity={1.6} color="#ffffff" castShadow
-        shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004}
-        shadow-camera-left={-240} shadow-camera-right={240} shadow-camera-top={170} shadow-camera-bottom={-170} shadow-camera-far={600}
+        position={SUN} intensity={2.0} color="#ffefd6" castShadow
+        shadow-mapSize={[4096, 4096]} shadow-bias={-0.0003} shadow-normalBias={0.04}
+        shadow-camera-left={-250} shadow-camera-right={250} shadow-camera-top={210} shadow-camera-bottom={-210} shadow-camera-far={900}
       />
-      <Site />
+      <Suspense fallback={null}>
+        {/* Bounding volume tree: hover and click tests on 200k triangles stay cheap. */}
+        <Bvh firstHitOnly>
+          <PlantModel />
+        </Bvh>
+      </Suspense>
       <GasSupply />
       {turbines.map((tb, i) => <TurbineUnit key={tb.id} tb={tb} index={i} selected={selected === tb.id} />)}
-      <SteamCycle />
+      <AirCooledCondenser />
       <Switchyard />
-      <Utilities />
       <PowerFlow />
       <DataCenter />
       <BatteryYard />

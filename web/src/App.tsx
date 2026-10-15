@@ -3,7 +3,7 @@ import { startClock, useStore, type CameraPreset, type View } from "./store";
 import {
   AlarmList, AssetDetail, BalanceChart, BalanceStats, Panel, PredictionList, PriorityChip, SensorPanel, SourceTag, TurbineStrip, UnitLoadBars, clockOf, requestStatusText,
 } from "./ui/parts";
-import { IconBell, IconDashboard, IconMark, IconPlant, IconTag, IconWrench } from "./ui/icons";
+import { BrandMark, IconBell, IconDashboard, IconPlant, IconTag, IconWrench } from "./ui/icons";
 import { MaintenanceView } from "./views/Maintenance";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 import { CopilotButton, CopilotPanel } from "./ui/Copilot";
@@ -24,9 +24,9 @@ function Sidebar() {
   return (
     <aside className="side" aria-label="Main">
       <div className="side-brand">
-        <IconMark />
+        <BrandMark size={34} variant="reverse" />
         <div>
-          <strong>Power Guard 360</strong>
+          <strong>Power Guard <em>360</em></strong>
           <span>Plant operations</span>
         </div>
       </div>
@@ -101,7 +101,7 @@ function TopBar() {
   return (
     <header className="top">
       <div className="crumbs">
-        <span className="crumb-brand"><IconMark /></span>
+        <span className="crumb-brand"><BrandMark size={28} /></span>
         <span className="crumb">Permian site</span>
         <span className="crumb-sep" aria-hidden>/</span>
         <span className="crumb">Kilby-style plant</span>
