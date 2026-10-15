@@ -130,7 +130,8 @@ function connect() {
     let ws: WebSocket;
     try { ws = new WebSocket(url); } catch { useStore.setState({ link: "local" }); retry = window.setTimeout(open, 5000); return; }
     socket = ws;
-    const giveUp = window.setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) ws.close(); }, 2500);
+    // A first wss:// connection to the hosted server (DNS, TLS, upgrade) can take several seconds on a slow network.
+    const giveUp = window.setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) ws.close(); }, 8000);
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data as string) as { type: string; plant?: PlantState; role?: string };
       if (msg.type === "state" && msg.plant) useStore.setState({ plant: msg.plant, link: "live" });
