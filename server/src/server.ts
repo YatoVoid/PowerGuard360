@@ -283,8 +283,10 @@ setInterval(() => {
 server.keepAliveTimeout = 60000;
 server.headersTimeout = 65000;
 
-server.listen(PORT, () => {
-  console.log(`Power Guard 360 plant server on :${PORT}`);
+// HOST=127.0.0.1 behind a reverse proxy, so only the proxy can reach the server. Unset, it listens everywhere for the LAN demo.
+const HOST = process.env.HOST || undefined;
+server.listen(PORT, HOST, () => {
+  console.log(`Power Guard 360 plant server on ${HOST ?? ""}:${PORT}`);
   if (!DEVICE_TOKEN) console.warn("DEVICE_TOKEN is not set, so /api/ingest rejects every reading. Set it to accept the sensor board.");
   if (OPEN_CONTROL) console.warn("OPEN_CONTROL=1: every screen can run the plant. Use it only on a private network.");
   else if (!ADMIN_PASSWORD_HASH || !SESSION_SECRET) console.warn("ADMIN_PASSWORD_HASH or SESSION_SECRET is not set, so nobody can sign in and every browser is read-only.");
