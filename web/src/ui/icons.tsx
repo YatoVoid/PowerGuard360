@@ -36,3 +36,6 @@ export const IconSpark = () => (
 export const IconClose = () => (
   <svg {...base}><path d="M5 5l10 10M15 5L5 15" /></svg>
 );
+export const IconInfo = () => (
+  <svg {...base}><circle cx="10" cy="10" r="7.5" /><path d="M10 9v5" /><path d="M10 6.2v.1" /></svg>
+);

@@ -3,8 +3,9 @@ import { startClock, useStore, type CameraPreset, type View } from "./store";
 import {
   AlarmList, AssetDetail, BalanceChart, BalanceStats, Panel, PredictionList, PriorityChip, SensorPanel, SourceTag, TurbineStrip, UnitLoadBars, clockOf, requestStatusText,
 } from "./ui/parts";
-import { BrandMark, IconBell, IconDashboard, IconPlant, IconTag, IconWrench } from "./ui/icons";
+import { BrandMark, IconBell, IconDashboard, IconInfo, IconPlant, IconTag, IconWrench } from "./ui/icons";
 import { MaintenanceView } from "./views/Maintenance";
+import { AboutView } from "./views/About";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 import { CopilotButton, CopilotPanel } from "./ui/Copilot";
 import { signIn, signInOffered, signOut } from "./auth";
@@ -16,6 +17,7 @@ const VIEWS: { id: View; label: string; icon: () => React.ReactElement }[] = [
   { id: "twin", label: "Plant", icon: IconPlant },
   { id: "dashboard", label: "Dashboard", icon: IconDashboard },
   { id: "maintenance", label: "Maintenance", icon: IconWrench },
+  { id: "about", label: "About", icon: IconInfo },
 ];
 
 function Sidebar() {
@@ -229,8 +231,17 @@ function DashboardView() {
   const history = useStore((s) => s.plant.history);
   const events = useStore((s) => s.plant.events);
   const source = useStore((s) => s.plant.board.source);
+  const setView = useStore((s) => s.setView);
   return (
     <div className="dash">
+      <section className="d-intro" aria-label="About this project">
+        <img src={`${import.meta.env.BASE_URL}about/gas-plant.jpg`} alt="" />
+        <div>
+          <h2>New here? This is a live model of a power plant for an AI data center.</h2>
+          <p>It's modeled on Project Kilby, the West Texas gas plant Chevron agreed in June 2026 to build for a Microsoft data center. Find out what's going on and why we built it, in plain English.</p>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={() => setView("about")}>Read about the project</button>
+      </section>
       <div className="d-kpis kpi-row"><BalanceStats /></div>
       <Panel title="Power balance" meta="Last 5 minutes" className="d-balance"><BalanceChart history={history} /></Panel>
       <Panel title="Alarms and events" meta={`${events.length} logged`} className="d-alarms"><AlarmList events={events} limit={12} /></Panel>
@@ -251,7 +262,7 @@ export default function App() {
   useEffect(() => {
     const onHash = () => {
       const h = location.hash.replace("#", "");
-      useStore.getState().setView(h === "dashboard" || h === "maintenance" ? h : "twin");
+      useStore.getState().setView(h === "dashboard" || h === "maintenance" || h === "about" ? h : "twin");
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -265,6 +276,7 @@ export default function App() {
           {view === "twin" && <TwinView />}
           {view === "dashboard" && <DashboardView />}
           {view === "maintenance" && <MaintenanceView />}
+          {view === "about" && <AboutView />}
         </main>
       </div>
       <CopilotPanel />

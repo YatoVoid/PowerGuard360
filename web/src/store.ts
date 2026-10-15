@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { createPlant, step } from "./sim/engine";
 import type { PlantState, StepInputs } from "./types";
 
-export type View = "twin" | "dashboard" | "maintenance";
+export type View = "twin" | "dashboard" | "maintenance" | "about";
 export type CameraPreset = "overview" | "top" | "turbines" | "control";
 
 // Same action shapes the plant server accepts (server/src/protocol.ts).
@@ -51,7 +51,7 @@ function initialPlant() {
 
 function viewFromHash(): View {
   const h = location.hash.replace("#", "");
-  return h === "dashboard" || h === "maintenance" ? h : "twin";
+  return h === "dashboard" || h === "maintenance" || h === "about" ? h : "twin";
 }
 
 export const useStore = create<Store>((set, get) => ({
