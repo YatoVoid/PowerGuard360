@@ -1,0 +1,57 @@
+# Power Guard 360 on the Oracle VM. Copy to /etc/caddy/Caddyfile (back up the old one first), then
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# Caddy gets and renews the certificates itself. The plant server (8787) and ML service (8790) stay on 127.0.0.1.
+
+# The website: the Vite build, copied to /var/www/powerguard360.
+powerguard360.us {
+	root * /var/www/powerguard360
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# The page talks only to the API; fonts come from Google; the Draco decoder needs WebAssembly.
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https://api.powerguard360.us wss://api.powerguard360.us; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	# Hashed build files never change; index.html must, so it is never cached.
+	@hashed path /assets/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+	@html path / /index.html
+	header @html Cache-Control "no-cache"
+
+	try_files {path} /index.html
+	file_server
+}
+
+www.powerguard360.us {
+	redir https://powerguard360.us{uri} permanent
+}
+
+# The plant server. Only what the website needs is public; everything else gets 403.
+# /api/ingest (sensor board) and /api/prediction (ML laptop) stay closed here, and keep their own tokens if opened later.
+api.powerguard360.us {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	@public path /health /ws /api/login /api/logout /api/session /api/copilot
+	handle @public {
+		# reverse_proxy passes WebSocket upgrades through. Caddy sets X-Forwarded-For to the real client,
+		# which the plant server uses for its rate limits.
+		reverse_proxy 127.0.0.1:8787 {
+			header_up -Cf-Connecting-Ip
+		}
+	}
+
+	handle {
+		respond "Forbidden" 403
+	}
+}

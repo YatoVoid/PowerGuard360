@@ -6,6 +6,7 @@ import type { z } from "zod";
 import { ClientMessage, RemotePrediction, SensorReading, dropBadReadings } from "./protocol.ts";
 import { CopilotLimiter, CopilotRequest, askGemini } from "./copilot.ts";
 import { MlScorer } from "./ml.ts";
+import { LoginLimiter, SESSION_COOKIE, allowed, clearedCookie, cookie, newSession, passwordOk, sessionCookie, sessionOk, type Role } from "./auth.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? "";
@@ -13,25 +14,65 @@ const MODEL_TOKEN = process.env.MODEL_TOKEN ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const COPILOT_MAX_BODY = 12 * 1024;
 const copilotLimit = new CopilotLimiter();
+// Admin sign-in. The hash comes from `npm run hash-password`; the secret signs session cookies.
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH ?? "";
+const SESSION_SECRET = process.env.SESSION_SECRET ?? "";
+// The engineer phone proves itself with this in its hello. Without it a phone can only watch.
+const PHONE_TOKEN = process.env.PHONE_TOKEN ?? "";
+// OPEN_CONTROL=1 is for a laptop demo on a private network: every screen may run the plant, as before sign-in existed.
+const OPEN_CONTROL = process.env.OPEN_CONTROL === "1";
+const loginLimit = new LoginLimiter();
 
-// Browsers may call the copilot only from the team's own pages: local dev, the LAN at the venue, and the Vercel deployments.
-const ORIGIN_OK = [
+// Browsers may connect only from the team's own pages: local dev, the LAN at the venue, and the Vercel deployments.
+// ALLOWED_ORIGINS (comma-separated, exact) replaces that list in production.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+const DEV_ORIGINS = [
   /^http:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/,
   /^https:\/\/power-guard-360(-[a-z0-9]+-powerguard360)?\.vercel\.app$/,
 ];
+function originOk(origin: string | undefined): origin is string {
+  if (!origin) return false;
+  return ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.includes(origin) : DEV_ORIGINS.some((r) => r.test(origin));
+}
 function allowOrigin(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin;
-  if (!origin || !ORIGIN_OK.some((r) => r.test(origin))) return false;
+  if (!originOk(origin)) return false;
   res.setHeader("access-control-allow-origin", origin);
+  res.setHeader("access-control-allow-credentials", "true");
   res.setHeader("vary", "origin");
   return true;
 }
 
-// Behind the Cloudflare tunnel every request arrives from loopback, so use the address Cloudflare saw.
+// Behind Caddy every request arrives from loopback. Caddy replaces X-Forwarded-For with the address it saw,
+// so a client can't pick its own rate-limit bucket.
 function clientIp(req: IncomingMessage) {
   const remote = req.socket.remoteAddress ?? "";
-  const cf = req.headers["cf-connecting-ip"];
-  return (remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1") && typeof cf === "string" ? cf : remote;
+  const xff = req.headers["x-forwarded-for"];
+  const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  return loopback && typeof xff === "string" && xff ? xff.split(",")[0].trim() : remote;
+}
+
+function isAdmin(req: IncomingMessage) {
+  return OPEN_CONTROL || sessionOk(SESSION_SECRET, cookie(req.headers.cookie, SESSION_COOKIE));
+}
+
+function login(req: IncomingMessage, res: ServerResponse) {
+  if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+  if (!ADMIN_PASSWORD_HASH || !SESSION_SECRET) return send(res, 503, { error: "Admin sign-in isn't configured on this server." });
+  const ip = clientIp(req);
+  if (loginLimit.blocked(ip)) return send(res, 429, { error: "Too many attempts. Try again in 15 minutes." });
+  readJson(req, res, (json) => {
+    const password = (json as { password?: unknown } | null)?.password;
+    if (typeof password !== "string" || password.length > 200 || !passwordOk(password, ADMIN_PASSWORD_HASH)) {
+      loginLimit.failed(ip);
+      console.warn(`[auth] failed admin sign-in from ${ip}`);
+      return send(res, 401, { error: "Wrong password." });
+    }
+    loginLimit.succeeded(ip);
+    console.log(`[auth] admin signed in from ${ip}`);
+    res.setHeader("set-cookie", sessionCookie(newSession(SESSION_SECRET)));
+    send(res, 200, { admin: true });
+  });
 }
 
 function copilot(req: IncomingMessage, res: ServerResponse) {
@@ -135,19 +176,57 @@ const server = createServer((req, res) => {
     return res.end();
   }
   if (req.method === "POST" && req.url === "/api/copilot") return copilot(req, res);
+  if ((req.url === "/api/login" || req.url === "/api/logout" || req.url === "/api/session") && req.method === "OPTIONS") {
+    if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+    res.writeHead(204, { "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-max-age": "600" });
+    return res.end();
+  }
+  if (req.method === "POST" && req.url === "/api/login") return login(req, res);
+  if (req.method === "POST" && req.url === "/api/logout") {
+    if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+    res.setHeader("set-cookie", clearedCookie);
+    return send(res, 200, { admin: false });
+  }
+  if (req.method === "GET" && req.url === "/api/session") {
+    if (!allowOrigin(req, res)) return send(res, 403, { error: "origin not allowed" });
+    return send(res, 200, { admin: isAdmin(req), signIn: !OPEN_CONTROL && Boolean(ADMIN_PASSWORD_HASH && SESSION_SECRET) });
+  }
   if (req.method === "POST" && req.url === "/api/prediction") return post(req, res, "prediction", MODEL_TOKEN, RemotePrediction, (p) => host.predict(p));
   send(res, 404, { error: "not found" });
 });
 
-const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 2048 });
+// A page from another site is turned away before the upgrade, so it can't ride on an admin's cookie.
+// Apps send no Origin header (the phone); they may connect and watch, and need PHONE_TOKEN to act.
+const wss = new WebSocketServer({
+  server, path: "/ws", maxPayload: 2048,
+  verifyClient: ({ req }: { req: IncomingMessage }) => {
+    const origin = req.headers.origin;
+    if (origin === undefined || originOk(origin)) return true;
+    console.warn(`[ws] refused origin ${origin} from ${clientIp(req)}`);
+    return false;
+  },
+});
+const roleOf = new WeakMap<WebSocket, Role>();
 const budget = new WeakMap<WebSocket, { second: number; count: number }>();
 const phoneOf = new Map<WebSocket, string>();
 function refreshPhones() {
   host.phonesOnline = new Set(phoneOf.values());
 }
 
+function phoneTokenOk(token: string | undefined) {
+  if (OPEN_CONTROL) return true;
+  if (!PHONE_TOKEN || !token) return false;
+  const got = Buffer.from(token);
+  const want = Buffer.from(PHONE_TOKEN);
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
 wss.on("connection", (ws, req) => {
-  console.log(`[ws] client connected from ${req.socket.remoteAddress}, ${wss.clients.size} online`);
+  // The admin cookie counts only on a page from an allowed origin; verifyClient refused the others.
+  const role: Role = OPEN_CONTROL || (req.headers.origin && isAdmin(req)) ? "admin" : "viewer";
+  roleOf.set(ws, role);
+  console.log(`[ws] ${role} connected from ${clientIp(req)}, ${wss.clients.size} online`);
+  ws.send(JSON.stringify({ type: "role", role }));
   ws.send(JSON.stringify({ type: "state", plant: host.plant }));
   ws.on("message", (raw) => {
     const now = Math.floor(Date.now() / 1000);
@@ -159,10 +238,19 @@ wss.on("connection", (ws, req) => {
     const parsed = ClientMessage.safeParse(json);
     if (!parsed.success) return ws.send(JSON.stringify({ type: "error", message: "unknown action" }));
     if (parsed.data.type === "hello") {
+      if (!phoneTokenOk(parsed.data.token)) {
+        console.warn(`[ws] phone hello from ${clientIp(req)} without a valid PHONE_TOKEN, staying read-only`);
+        return ws.send(JSON.stringify({ type: "error", message: "read-only: phone token missing or wrong" }));
+      }
+      if (roleOf.get(ws) !== "admin") roleOf.set(ws, "phone");
+      ws.send(JSON.stringify({ type: "role", role: roleOf.get(ws) }));
       phoneOf.set(ws, parsed.data.engineerId);
       refreshPhones();
       console.log(`[ws] phone app online as ${parsed.data.engineerId}`);
       return;
+    }
+    if (!allowed(roleOf.get(ws) ?? "viewer", parsed.data.action, phoneOf.get(ws))) {
+      return ws.send(JSON.stringify({ type: "error", message: "read-only: sign in as admin to control the plant" }));
     }
     host.apply(parsed.data.action);
   });
@@ -198,5 +286,9 @@ server.headersTimeout = 65000;
 server.listen(PORT, () => {
   console.log(`Power Guard 360 plant server on :${PORT}`);
   if (!DEVICE_TOKEN) console.warn("DEVICE_TOKEN is not set, so /api/ingest rejects every reading. Set it to accept the sensor board.");
+  if (OPEN_CONTROL) console.warn("OPEN_CONTROL=1: every screen can run the plant. Use it only on a private network.");
+  else if (!ADMIN_PASSWORD_HASH || !SESSION_SECRET) console.warn("ADMIN_PASSWORD_HASH or SESSION_SECRET is not set, so nobody can sign in and every browser is read-only.");
+  if (!OPEN_CONTROL && !PHONE_TOKEN) console.warn("PHONE_TOKEN is not set, so the engineer phone can only watch.");
+  if (ALLOWED_ORIGINS.length) console.log(`Browser origins allowed: ${ALLOWED_ORIGINS.join(", ")}`);
   if (!MODEL_TOKEN) console.warn("MODEL_TOKEN is not set, so /api/prediction rejects every forecast. Set it to accept the ML laptop.");
 });

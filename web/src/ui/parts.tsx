@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "../store";
+import { useCanControl, useStore } from "../store";
 import { GAS_ALERT_PCT, GAS_WARMUP_SAMPLES, LIVE_SENSOR_UNIT, REPAIR_S, WATCH_RISK } from "../sim/engine";
 import { FAILURE_NAME, modelNote } from "../sim/model";
 import type { Features, HistoryPoint, MaintenanceRequest, MlDiagnosis, PlantEvent, Recommendation, Source, Turbine } from "../types";
@@ -194,6 +194,7 @@ export function RecommendationCard({ rec, compact = false }: { rec: Recommendati
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const [note, setNote] = useState(rec.action);
+  const canControl = useCanControl();
   const level = rec.alertLevel === "Critical" ? "p1" : rec.alertLevel === "Alert" ? "p2" : "p3";
   return (
     <article className={`rec rec-${level}`} aria-label={`${rec.id} maintenance recommended for ${rec.asset}`}>
@@ -212,14 +213,14 @@ export function RecommendationCard({ rec, compact = false }: { rec: Recommendati
         <p className="rec-types">Possible: {rec.types.map((x) => `${x.name.toLowerCase()} (${Math.round(x.probability * 100)}%)`).join(", ")}</p>
       )}
       {rec.factors && <FactorList factors={rec.factors} />}
-      <form className="rec-form" onSubmit={(e) => { e.preventDefault(); act({ type: "review", recommendationId: rec.id, decision: "request", note }); }}>
+      {!canControl ? <p className="note">Waiting for the plant manager's decision.</p> : <form className="rec-form" onSubmit={(e) => { e.preventDefault(); act({ type: "review", recommendationId: rec.id, decision: "request", note }); }}>
         <label htmlFor={`note-${rec.id}`}>What should the engineer check?</label>
         <textarea id={`note-${rec.id}`} value={note} onChange={(e) => setNote(e.target.value)} rows={compact ? 2 : 3} maxLength={200} />
         <div className="rec-actions">
           <button type="button" className="btn btn-quiet" onClick={() => act({ type: "review", recommendationId: rec.id, decision: "decline", note: "" })}>Decline</button>
           <button type="submit" className="btn btn-primary">Request maintenance</button>
         </div>
-      </form>
+      </form>}
       <p className="hint">{rec.by} recommendation. Declining silences this issue until the reading recovers; if it comes back or gets worse, you'll be asked again.</p>
     </article>
   );
@@ -252,7 +253,8 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
   const pred = useStore((s) => s.plant.predictions.find((p) => p.turbineId === tb.id));
   const trip = useStore((s) => s.trip);
   const reset = useStore((s) => s.reset);
-  const canTrip = tb.status === "running" || tb.status === "watch";
+  const canControl = useCanControl();
+  const canTrip = canControl && (tb.status === "running" || tb.status === "watch");
   const live = useStore((s) => s.link === "live");
   const ask = useCopilot((s) => s.ask);
   const question = tb.status === "tripped" ? `Why did ${tb.id} trip, and what should the engineer check?`
@@ -295,7 +297,7 @@ export function TurbineDetail({ tb }: { tb: Turbine }) {
       {tb.status === "tripped" && tb.diagnosis && <MlDiagnosisPanel ml={tb.diagnosis} title="Model diagnosis of the trip reading" />}
       <div className="actions">
         {canTrip && <button type="button" className="btn btn-danger" onClick={() => trip(tb.id)}>Trip {tb.id}</button>}
-        {tb.status === "tripped" && <button type="button" className="btn" onClick={() => reset(tb.id)}>Reset and restart</button>}
+        {canControl && tb.status === "tripped" && <button type="button" className="btn" onClick={() => reset(tb.id)}>Reset and restart</button>}
       </div>
     </div>
   );
@@ -370,7 +372,9 @@ export function PriorityChip({ p }: { p: MaintenanceRequest["priority"] }) {
 export function DispatchControl({ r }: { r: MaintenanceRequest }) {
   const engineers = useStore((s) => s.plant.engineers);
   const act = useStore((s) => s.act);
+  const canControl = useCanControl();
   const [chosen, setChosen] = useState<string | null>(null);
+  if (!canControl) return null;
   const free = engineers
     .filter((e) => e.status === "available")
     .map((e) => ({ e, m: pathLength(routeFrom(e.pos, r.asset)) }))
@@ -395,6 +399,7 @@ function MaintenanceBox({ asset }: { asset: string }) {
   const rec = useStore((s) => s.plant.recommendations.find((r) => r.asset === asset && r.status === "pending"));
   const engineer = useStore((s) => (req ? s.plant.engineers.find((e) => e.id === req.engineerId) : undefined));
   const act = useStore((s) => s.act);
+  const canControl = useCanControl();
   const [reason, setReason] = useState("");
   return (
     <div className="maint-box">
@@ -416,10 +421,12 @@ function MaintenanceBox({ asset }: { asset: string }) {
           {req.status === "repairing" && (
             <div className="ship-bar" aria-hidden><span style={{ transform: `scaleX(${1 - req.repairLeftS / REPAIR_S})` }} /></div>
           )}
-          <div className="actions"><button type="button" className="btn" onClick={() => act({ type: "cancel", requestId: req.id })}>Cancel request</button></div>
+          {canControl && <div className="actions"><button type="button" className="btn" onClick={() => act({ type: "cancel", requestId: req.id })}>Cancel request</button></div>}
         </>
       ) : rec ? (
         <RecommendationCard key={rec.id} rec={rec} compact />
+      ) : !canControl ? (
+        <p className="note">No open request for {assetLabel(asset)}.</p>
       ) : (
         <form
           className="maint-form"

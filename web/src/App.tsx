@@ -7,6 +7,7 @@ import { BrandMark, IconBell, IconDashboard, IconPlant, IconTag, IconWrench } fr
 import { MaintenanceView } from "./views/Maintenance";
 import { LIVE_SENSOR_UNIT } from "./sim/engine";
 import { CopilotButton, CopilotPanel } from "./ui/Copilot";
+import { signIn, signInOffered, signOut } from "./auth";
 
 const PlantScene = lazy(() => import("./scene/PlantScene").then((m) => ({ default: m.PlantScene })));
 
@@ -69,6 +70,43 @@ function LinkStatus() {
   );
 }
 
+// Visitors see the live plant read-only. The plant manager signs in here to take control.
+function AdminAccess() {
+  const link = useStore((s) => s.link);
+  const role = useStore((s) => s.role);
+  const [offered, setOffered] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (link === "live") signInOffered().then(setOffered); }, [link]);
+  if (link !== "live") return null;
+  if (role === "admin") {
+    return <button type="button" className="btn btn-quiet admin-btn" onClick={() => signOut()} title="Signed in as plant manager">Admin · Sign out</button>;
+  }
+  if (!offered) return <span className="realtime" title="Sign in as admin to control the plant">View only</span>;
+  return (
+    <div className="admin">
+      <button type="button" className="btn btn-quiet admin-btn" aria-expanded={open} onClick={() => { setOpen(!open); setError(null); }}>View only · Sign in</button>
+      {open && (
+        <form className="admin-form" onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          const err = await signIn(password);
+          setBusy(false);
+          setError(err);
+          if (!err) { setOpen(false); setPassword(""); }
+        }}>
+          <label htmlFor="admin-password">Admin password</label>
+          <input id="admin-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} maxLength={200} autoFocus />
+          {error && <p className="admin-error" role="alert">{error}</p>}
+          <button type="submit" className="btn btn-primary" disabled={busy || !password}>{busy ? "Signing in" : "Sign in"}</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function MaintSummary() {
   const requests = useStore((s) => s.plant.requests);
   const setView = useStore((s) => s.setView);
@@ -110,6 +148,7 @@ function TopBar() {
       </div>
       <div className="top-meta">
         <LinkStatus />
+        <AdminAccess />
         <time className="clock" aria-label="Plant time">{clockOf(t)}</time>
         <CopilotButton />
         <button type="button" className={`bell ${alarms ? "has-alarms" : ""}`} onClick={() => setView("maintenance")} aria-label={`${alarms} maintenance recommendations and open requests`}>

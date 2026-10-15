@@ -66,7 +66,8 @@ if (( WITH_ML )); then
   wait_port ml 8790 60
 fi
 
-start server 8787 server npx tsx --env-file=.env src/server.ts
+# On the demo hotspot every screen may run the plant, as before admin sign-in existed. OPEN_CONTROL=0 ./deploy.sh to require it.
+start server 8787 server env OPEN_CONTROL="${OPEN_CONTROL:-1}" npx tsx --env-file=.env src/server.ts
 start web 5180 web npx vite --host --port 5180
 wait_port server 8787 30
 wait_port web 5180 30

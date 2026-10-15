@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useStore } from "../store";
+import { useCanControl, useStore } from "../store";
 import { useCopilot } from "../copilot";
 import { assetLabel } from "../sim/site";
 import { DispatchControl, Panel, PriorityChip, RecommendationCard, etaText, fmt, requestStatusText } from "../ui/parts";
@@ -24,6 +24,7 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
   const setView = useStore((s) => s.setView);
   const act = useStore((s) => s.act);
   const live = useStore((s) => s.link === "live");
+  const canControl = useCanControl();
   const ask = useCopilot((s) => s.ask);
   const done = r.status === "resolved" || r.status === "cancelled";
   return (
@@ -48,7 +49,7 @@ function RequestCard({ r }: { r: MaintenanceRequest }) {
       {!done && (
         <div className="req-actions">
           {live && <button type="button" className="btn btn-quiet" onClick={() => ask(`Explain ${r.id} on ${r.asset}: what is wrong, how urgent is it, and what should the engineer bring?`, r.asset)}>Explain</button>}
-          <button type="button" className="btn btn-quiet" onClick={() => act({ type: "cancel", requestId: r.id })}>Cancel</button>
+          {canControl && <button type="button" className="btn btn-quiet" onClick={() => act({ type: "cancel", requestId: r.id })}>Cancel</button>}
         </div>
       )}
     </li>
@@ -61,6 +62,7 @@ function NewRequest() {
   const [asset, setAsset] = useState("GT-01");
   const [reason, setReason] = useState("");
   const busy = requests.some((r) => r.asset === asset && r.status !== "resolved" && r.status !== "cancelled");
+  if (!useCanControl()) return <p className="note">View only. The plant manager signs in to raise requests.</p>;
   return (
     <form className="new-req" onSubmit={(e) => { e.preventDefault(); act({ type: "request", asset, reason }); setReason(""); }}>
       <label>

@@ -24,7 +24,8 @@ export type Action = z.infer<typeof Action>;
 export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("action"), action: Action }),
   // The mobile app says hello so the server knows a real person is carrying the phone engineer's role.
-  z.object({ type: z.literal("hello"), role: z.literal("phone"), engineerId: id }),
+  // It carries PHONE_TOKEN so a web page can't claim to be the phone and start acting.
+  z.object({ type: z.literal("hello"), role: z.literal("phone"), engineerId: id, token: z.string().max(200).optional() }),
 ]);
 
 // Same shape firmware/README.md documents: the six AI4I features for GT-08, plus air quality at gas metering.

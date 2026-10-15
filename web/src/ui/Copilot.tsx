@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCopilot, type CopilotMessage } from "../copilot";
-import { useStore } from "../store";
+import { useCanControl, useStore } from "../store";
 import { assetLabel } from "../sim/site";
 import { IconClose, IconSpark } from "./icons";
 
@@ -18,13 +18,14 @@ function withLinks(text: string): ReactNode[] {
 function Suggestion({ s }: { s: NonNullable<CopilotMessage["suggestion"]> }) {
   const act = useStore((st) => st.act);
   const open = useStore((st) => st.plant.requests.some((r) => r.asset === s.asset && r.status !== "resolved" && r.status !== "cancelled"));
+  const canControl = useCanControl();
   const name = s.asset.startsWith("GT-") ? s.asset : assetLabel(s.asset);
   return (
     <div className="cp-suggest">
       <p><strong>Send an engineer to {name}?</strong> {s.reason}</p>
-      <button type="button" className="btn btn-primary" disabled={open} onClick={() => act({ type: "request", asset: s.asset, reason: s.reason })}>
+      {canControl && <button type="button" className="btn btn-primary" disabled={open} onClick={() => act({ type: "request", asset: s.asset, reason: s.reason })}>
         {open ? "Request raised" : "Raise request"}
-      </button>
+      </button>}
     </div>
   );
 }

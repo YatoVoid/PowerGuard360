@@ -16,6 +16,8 @@ export const ME = PHONE_ENGINEER;
 
 // Over USB, `adb reverse tcp:8787 tcp:8787` makes the laptop's plant server reachable at 127.0.0.1.
 const SERVER = process.env.EXPO_PUBLIC_WS_URL ?? 'ws://127.0.0.1:8787/ws';
+// The server's PHONE_TOKEN. Without it the hosted server keeps this phone read-only; a laptop demo with OPEN_CONTROL doesn't need it.
+const PHONE_TOKEN = process.env.EXPO_PUBLIC_PHONE_TOKEN;
 
 export type Link = 'connecting' | 'live' | 'local';
 export type Action =
@@ -181,7 +183,7 @@ function connect() {
     const ws = new WebSocket(SERVER);
     socket = ws;
     const giveUp = setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) ws.close(); }, 3000);
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'phone', engineerId: ME }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'phone', engineerId: ME, token: PHONE_TOKEN }));
     ws.onmessage = (ev) => {
       const msg = JSON.parse(String(ev.data)) as { type: string; plant?: PlantState };
       if (msg.type !== 'state' || !msg.plant) return;

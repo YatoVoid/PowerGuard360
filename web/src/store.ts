@@ -16,10 +16,13 @@ export type Action =
 
 // "live" = following the shared plant server; "local" = running our own copy because no server is reachable.
 export type Link = "connecting" | "live" | "local";
+// What the plant server lets this page do. Visitors watch; a signed-in admin runs the plant.
+export type Role = "viewer" | "admin";
 
 interface Store {
   plant: PlantState;
   link: Link;
+  role: Role;
   view: View;
   selected: string | null;
   showLabels: boolean;
@@ -54,6 +57,7 @@ function viewFromHash(): View {
 export const useStore = create<Store>((set, get) => ({
   plant: initialPlant(),
   link: "connecting",
+  role: "viewer",
   view: viewFromHash(),
   selected: null,
   showLabels: true,
@@ -81,6 +85,9 @@ export const useStore = create<Store>((set, get) => ({
   reset: (unit) => get().act({ type: "reset", unit }),
 }));
 
+// On the shared plant only an admin may act; a page running its own copy controls it freely.
+export const useCanControl = () => useStore((s) => s.link !== "live" || s.role === "admin");
+
 function localTick() {
   const s = useStore.getState();
   if (s.link === "live") return;
@@ -105,6 +112,14 @@ export function serverUrl() {
   return `ws://${location.hostname}:8787/ws`;
 }
 
+// After signing in or out the socket is reopened at once, so the server reads the new session cookie.
+let reopenNow = false;
+export function reconnect() {
+  if (!socket) return;
+  reopenNow = true;
+  socket.close();
+}
+
 function connect() {
   const url = serverUrl();
   if (!url) { useStore.setState({ link: "local" }); return () => {}; }
@@ -117,14 +132,16 @@ function connect() {
     socket = ws;
     const giveUp = window.setTimeout(() => { if (ws.readyState !== WebSocket.OPEN) ws.close(); }, 2500);
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data as string) as { type: string; plant?: PlantState };
+      const msg = JSON.parse(ev.data as string) as { type: string; plant?: PlantState; role?: string };
       if (msg.type === "state" && msg.plant) useStore.setState({ plant: msg.plant, link: "live" });
+      if (msg.type === "role") useStore.setState({ role: msg.role === "admin" ? "admin" : "viewer" });
     };
     ws.onclose = () => {
       window.clearTimeout(giveUp);
       if (socket === ws) socket = null;
-      useStore.setState({ link: "local" });
-      if (!stopped) retry = window.setTimeout(open, 5000);
+      useStore.setState({ link: reopenNow ? "connecting" : "local", role: "viewer" });
+      if (!stopped) retry = window.setTimeout(open, reopenNow ? 0 : 5000);
+      reopenNow = false;
     };
   };
   open();

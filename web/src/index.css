@@ -99,6 +99,14 @@ h1, h2, h3, h4 { margin: 0; }
 .top-meta { display: flex; align-items: center; gap: 14px; }
 .realtime { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); }
 .realtime .dot { margin-top: 0; }
+/* admin sign-in: a small popover under the top bar button */
+.admin { position: relative; }
+.admin-btn { white-space: nowrap; }
+.admin-form { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: 240px; display: grid; gap: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-m); box-shadow: 0 8px 24px rgb(0 0 0 / 0.14); }
+.admin-form label { font-size: var(--fs-s); color: var(--ink-2); }
+.admin-form input { font: inherit; font-size: var(--fs-body); padding: 7px 10px; border: 1px solid var(--rule-2); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); }
+.admin-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.admin-error { margin: 0; font-size: var(--fs-s); color: var(--trip); }
 .clock { font-weight: 500; font-size: 14px; }
 .bell { position: relative; display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--rule); border-radius: var(--radius-s); background: var(--surface); cursor: pointer; color: var(--ink-2); }
 .bell:hover { background: var(--surface-2); }
